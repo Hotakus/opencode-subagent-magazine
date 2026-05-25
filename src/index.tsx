@@ -425,7 +425,7 @@ function SubAgentPanel(props: {
   onMount(() => {
     // Restore expanded entries from KV
     try {
-      const saved = props.api.kv.get<Record<string, boolean>>(`${KV_PREFIX}.expanded_map`, {})
+      const saved = props.api.kv.get<Record<string, boolean>>(`${KV_PREFIX}.expanded_map.${props.sessionId}`, {})
       const set = new Set<string>()
       for (const [id, v] of Object.entries(saved)) { if (v) set.add(id) }
       if (set.size > 0) setExpanded(set)
@@ -616,7 +616,7 @@ function SubAgentPanel(props: {
       // Persist all expanded entries as a single KV map
       const map: Record<string, boolean> = {}
       for (const eid of next) map[eid] = true
-      try { props.api.kv.set(`${KV_PREFIX}.expanded_map`, map) } catch {}
+      try { props.api.kv.set(`${KV_PREFIX}.expanded_map.${props.sessionId}`, map) } catch {}
       return next
     })
   }
@@ -653,7 +653,7 @@ function SubAgentPanel(props: {
 
   const spacerCols = createMemo(() => {
     if (!anyEntry()) return 0
-    return Math.max(1, panelWidth() - leftCols() - 1 - summaryCols())
+    return Math.max(1, panelWidth() - leftCols() - summaryCols())
   })
 
   const valueCols = (label: string) =>
