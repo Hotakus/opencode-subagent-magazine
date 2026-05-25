@@ -32,10 +32,10 @@ interface SubEntry {
   title: string
   agent: string
   prompt: string
-  /** Context tokens consumed by the sub‑agent */
+  error?: string
   tokens?: number
+  cost?: number
   status: SubStatus
-  /** Sub‑agent session ID — used to match session.idle / session.error events */
   sessionId?: string
   startedAt: number
   endedAt?: number
@@ -55,6 +55,7 @@ const I18N: Record<Lang, Record<string, string>> = {
     "agent.label": "代理",
     "time.label": "耗时",
     "tokens.label": "上下文",
+    "error.label": "错误",
   },
   en: {
     "panel.title": "Sub-Agents",
@@ -63,6 +64,7 @@ const I18N: Record<Lang, Record<string, string>> = {
     "agent.label": "agent",
     "time.label": "time",
     "tokens.label": "context",
+    "error.label": "error",
   },
 }
 
@@ -277,6 +279,22 @@ function SubAgentPanel(props: {
     }
   }
 
+  /** Sum USD cost from a session's assistant messages. */
+  const readSessionCost = (sid: string): number | undefined => {
+    if (!sid) return undefined
+    try {
+      const msgs = props.api.state.session.messages(sid)
+      if (!msgs) return undefined
+      let total = 0
+      for (const m of msgs as any[]) {
+        if (m.role === "assistant" && typeof m.cost === "number") total += m.cost
+      }
+      return total > 0 ? total : undefined
+    } catch {
+      return undefined
+    }
+  }
+
   // ── upsert ──
   const upsertEntry = (
     partial: Omit<SubEntry, "startedAt" | "endedAt"> & { startedAt?: number }
@@ -343,32 +361,54 @@ function SubAgentPanel(props: {
     const sid = String(props_?.sessionID ?? "")
     if (!sid) return
 
-    // Read token usage from completed sub‑agent session
     const sessionTokens = readSessionTokens(sid)
-    // Also get agent name for fallback matching
+    const sessionCost = readSessionCost(sid)
     let sessionAgent: string | undefined
-    try { sessionAgent = props.api.state.session.get(sid)?.agent } catch {}
+    let errorMsg: string | undefined
+    try {
+      const s = props.api.state.session.get(sid)
+      sessionAgent = s?.agent
+      if (status === "error") {
+        const evtErr = props_?.error as Record<string, unknown> | undefined
+        errorMsg = String(evtErr?.message ?? evtErr ?? props_?.message ?? "")
+        if (!errorMsg) {
+          const msgs = props.api.state.session.messages(sid)
+          if (msgs) {
+            for (let i = (msgs as any[]).length - 1; i >= 0; i--) {
+              const m = (msgs as any[])[i]
+              if (m.role === "assistant" && m.error) {
+                errorMsg = String((m.error as any).message ?? m.error)
+                break
+              }
+            }
+          }
+        }
+      }
+    } catch {}
 
     setEntryMap((prev) => {
       let changed = false
       const next = new Map(prev)
-      // Pass 1: exact sessionId match
       for (const [id, entry] of next) {
         if (entry.status === "running" && entry.sessionId === sid) {
           next.set(id, {
             ...entry, status, endedAt: Date.now(),
             tokens: entry.tokens ?? sessionTokens,
+            cost: entry.cost ?? sessionCost,
+            error: errorMsg || entry.error,
           })
           changed = true
         }
       }
-      // Pass 2: fallback — match by agent name for orphan entries
-      if (!changed && sessionAgent && sessionTokens) {
+      if (!changed && sessionAgent && (sessionTokens || sessionCost || errorMsg)) {
         for (const [id, entry] of next) {
           if (entry.status === "running" && entry.agent === sessionAgent) {
             next.set(id, {
               ...entry, status, endedAt: Date.now(),
-              tokens: sessionTokens, sessionId: sid,
+              tokens: sessionTokens || entry.tokens,
+              cost: sessionCost || entry.cost,
+              sessionId: sid,
+              error: errorMsg || entry.error,
             })
             changed = true
             break
@@ -383,6 +423,14 @@ function SubAgentPanel(props: {
   const bump = () => setRenderTick((v) => v + 1)
 
   onMount(() => {
+    // Restore expanded entries from KV
+    try {
+      const saved = props.api.kv.get<Record<string, boolean>>(`${KV_PREFIX}.expanded_map`, {})
+      const set = new Set<string>()
+      for (const [id, v] of Object.entries(saved)) { if (v) set.add(id) }
+      if (set.size > 0) setExpanded(set)
+    } catch {}
+
     // Fast clock for smooth time display, separate from token polling
     const clock = setInterval(() => { setNow(Date.now()); bump() }, 100)
     // Token poll — runs every 500ms for running entries
@@ -568,6 +616,10 @@ function SubAgentPanel(props: {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
       else next.add(id)
+      // Persist all expanded entries as a single KV map
+      const map: Record<string, boolean> = {}
+      for (const eid of next) map[eid] = true
+      try { props.api.kv.set(`${KV_PREFIX}.expanded_map`, map) } catch {}
       return next
     })
   }
@@ -671,12 +723,10 @@ function SubAgentPanel(props: {
               const isError = entry.status === "error"
               const elapsed = () => (entry.endedAt ?? now()) - entry.startedAt
 
-              const statusDot = "\u25cf"
-              const statusColor = isRunning
-                ? pal().warning
-                : isError
-                  ? pal().error
-                  : pal().success
+              const statusDot = () =>
+                isRunning ? (now() % 1000 < 500 ? "\u25cf" : "\u25cb") : "\u25cf"
+              const statusColor = () =>
+                isRunning ? pal().warning : isError ? pal().error : pal().success
 
               const timeColor = () =>
                 isRunning ? pal().warning : isError ? pal().error : pal().muted
@@ -722,7 +772,7 @@ function SubAgentPanel(props: {
                       {isExpanded() ? "\u25bc" : "\u25b6"}
                     </span>
                     {" "}
-                    <span style={{ fg: statusColor }}>{statusDot}</span>
+                    <span style={{ fg: statusColor() }}>{statusDot()}</span>
                     {" "}
                     <span style={{ fg: pal().text }}>{labelText()}</span>
                     {timeText() ? (
@@ -757,6 +807,20 @@ function SubAgentPanel(props: {
                         {"  "}
                         <span style={{ fg: pal().primary }}>{t("tokens.label")}: </span>
                         <span style={{ fg: pal().muted }}>{fmtTokens(entry.tokens!)}</span>
+                      </text>
+                    </Show>
+                    <Show when={entry.error}>
+                      <text>
+                        {"  "}
+                        <span style={{ fg: pal().error }}>{t("error.label")}: </span>
+                        <span style={{ fg: pal().error }}>{truncate(entry.error!, Math.max(6, panelWidth() - 2 - visualWidth(t("error.label") + ": ")))}</span>
+                      </text>
+                    </Show>
+                    <Show when={entry.cost !== undefined}>
+                      <text>
+                        {"  "}
+                        <span style={{ fg: pal().primary }}>cost: </span>
+                        <span style={{ fg: pal().muted }}>${entry.cost!.toFixed(4)}</span>
                       </text>
                     </Show>
                     <Show when={entry.prompt}>
