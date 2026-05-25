@@ -602,13 +602,10 @@ function SubAgentPanel(props: {
   const errCount = createMemo(() => entryList().filter((e) => e.status === "error").length)
   const anyEntry = () => entryList().length > 0
 
-  const maxElapsed = createMemo(() => {
-    const nowVal = now()
-    const vals = entryList().map((e) => {
-      const dur = (e.endedAt ?? nowVal) - e.startedAt
-      return dur
-    })
-    return vals.length ? Math.max(...vals) : 0
+  const totalTokens = createMemo(() => {
+    let sum = 0
+    for (const e of entryList()) { if (e.tokens) sum += e.tokens }
+    return sum
   })
 
   const toggleExpand = (id: string) => {
@@ -634,7 +631,7 @@ function SubAgentPanel(props: {
       done: `${dot}${doneCount()}`,
       running: runningCount() > 0 ? `${dot}${runningCount()}` : null,
       err: errCount() > 0 ? `${dot}${errCount()}` : null,
-      duration: fmtDurationShort(maxElapsed(), false),
+      duration: totalTokens() > 0 ? fmtTokens(totalTokens()) : "",
     }
   })
 
@@ -650,7 +647,7 @@ function SubAgentPanel(props: {
     let w = visualWidth(p.done)
     if (p.running) w += 1 + visualWidth(p.running)
     if (p.err) w += 1 + visualWidth(p.err)
-    w += 1 + visualWidth(p.duration)
+    w += p.duration ? 1 + visualWidth(p.duration) : 0
     return w
   })
 
@@ -699,7 +696,9 @@ function SubAgentPanel(props: {
             {errCount() > 0 && (
               <span style={{ fg: pal().error }}> {summaryParts()!.err}</span>
             )}
-            <span style={{ fg: pal().muted }}> {summaryParts()!.duration}</span>
+            {summaryParts()!.duration ? (
+              <span style={{ fg: pal().muted }}> {summaryParts()!.duration}</span>
+            ) : null}
           </>
         ) : null}
       </text>
