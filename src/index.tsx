@@ -492,11 +492,7 @@ function SubAgentPanel(props: {
   // ── derived signals ──
   // Stable list — only changes when entryMap changes
   const entryList = createMemo(() => {
-    return [...entryMap().values()].sort((a, b) => {
-      if (a.status !== b.status) return a.status === "running" ? -1 : 1
-      if (a.status === "running") return a.startedAt - b.startedAt
-      return (b.endedAt ?? 0) - (a.endedAt ?? 0)
-    })
+    return [...entryMap().values()].sort((a, b) => b.startedAt - a.startedAt)
   })
 
   const visibleList = createMemo(() => entryList().slice(0, props.maxEntries()))
