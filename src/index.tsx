@@ -423,14 +423,26 @@ function SubAgentPanel(props: {
   const bump = () => setRenderTick((v) => v + 1)
 
   onMount(() => {
-    // Restore expanded entries from KV
-    try {
-      const saved = props.api.kv.get<Record<string, boolean>>(`${KV_PREFIX}.expanded_map.${props.sessionId}`, {})
-      const set = new Set<string>()
-      for (const [id, v] of Object.entries(saved)) { if (v) set.add(id) }
-      if (set.size > 0) setExpanded(set)
-    } catch {}
-
+    // Restore expanded entries — poll kv.ready like visual-cache
+    const restoreExpanded = () => {
+      try {
+        const saved = props.api.kv.get<Record<string, boolean>>(`${KV_PREFIX}.expanded_map.${props.sessionId}`, {})
+        const set = new Set<string>()
+        for (const [id, v] of Object.entries(saved)) { if (v) set.add(id) }
+        if (set.size > 0) setExpanded(set)
+      } catch {}
+    }
+    if (props.api.kv.ready) {
+      restoreExpanded()
+    } else {
+      let tries = 0
+      const poll = setInterval(() => {
+        if (props.api.kv.ready || ++tries > 100) {
+          clearInterval(poll)
+          restoreExpanded()
+        }
+      }, 10)
+    }
     // Fast clock for smooth time display, separate from token polling
     const clock = setInterval(() => { setNow(Date.now()); bump() }, 100)
     // Token poll — runs every 500ms for running entries
@@ -613,12 +625,12 @@ function SubAgentPanel(props: {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
       else next.add(id)
-      // Persist all expanded entries as a single KV map
-      const map: Record<string, boolean> = {}
-      for (const eid of next) map[eid] = true
-      try { props.api.kv.set(`${KV_PREFIX}.expanded_map.${props.sessionId}`, map) } catch {}
       return next
     })
+    // Persist outside setter — Solid may defer callbacks
+    const map: Record<string, boolean> = {}
+    for (const eid of expanded()) map[eid] = true
+    try { props.api.kv.set(`${KV_PREFIX}.expanded_map.${props.sessionId}`, map) } catch {}
   }
 
   const sep = () => "\u2500".repeat(Math.max(1, panelWidth()))
