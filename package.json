@@ -1,0 +1,56 @@
+{
+  "name": "opencode-subagent-monitor",
+  "version": "1.0.0",
+  "description": "OpenCode TUI plugin monitoring sub-agent invocation status in real time",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./tui": {
+      "import": "./src/index.tsx",
+      "config": {
+        "enabled": true
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "install.mjs",
+    "README.md"
+  ],
+  "bin": {
+    "opencode-subagent-monitor": "install.mjs"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "version": "node -e \"require('fs').writeFileSync('src/_version.ts','// auto-generated\\nexport const PLUGIN_VERSION='+JSON.stringify(require('./package.json').version)+';\\n')\"",
+    "prepublishOnly": "tsc"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "tui",
+    "subagent",
+    "subtask"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.14.0",
+    "@opencode-ai/sdk": ">=1.14.0",
+    "@opentui/core": ">=0.2.0",
+    "@opentui/solid": ">=0.2.0",
+    "solid-js": ">=1.9.0"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "^1.14.50",
+    "@opencode-ai/sdk": "^1.14.50",
+    "tsx": "^4.22.3",
+    "typescript": "^5.8.0"
+  }
+}
