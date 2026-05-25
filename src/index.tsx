@@ -393,6 +393,13 @@ function SubAgentPanel(props: {
           const next = new Map(prev)
           for (const [id, entry] of next) {
             if (entry.status === "running" && entry.sessionId) {
+              // Only read from child sessions, never the parent
+              let isChild = false
+              try {
+                const s = props.api.state.session.get(entry.sessionId)
+                isChild = s?.parentID === props.sessionId
+              } catch {}
+              if (!isChild) continue
               const total = readSessionTokens(entry.sessionId)
               if (total !== undefined && total !== entry.tokens) {
                 next.set(id, { ...entry, tokens: total })
