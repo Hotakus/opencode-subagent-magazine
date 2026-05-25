@@ -1,6 +1,6 @@
 {
   "name": "opencode-subagent-monitor",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "OpenCode TUI plugin monitoring sub-agent invocation status in real time",
   "type": "module",
   "main": "dist/index.js",
