@@ -35,6 +35,8 @@ interface SubEntry {
   command?: string
   model?: string
   status: SubStatus
+  /** Sub‑agent session ID — used to match session.idle / session.error events */
+  sessionId?: string
   startedAt: number
   endedAt?: number
 }
@@ -197,11 +199,47 @@ function SubAgentPanel(props: {
 }): JSX.Element {
   const t = (key: string) => I18N[props.lang()][key] ?? key
 
+  // ── kv persistence ──
+  // Entries survive component unmount/remount (e.g. Ctrl‑X Down / Up)
+  const kvEntryKey = (sid: string) => `${KV_PREFIX}.entries.${sid}`
+
+  const loadFromKv = (sid: string): Map<string, SubEntry> => {
+    const m = new Map<string, SubEntry>()
+    try {
+      const raw = props.api.kv.get(kvEntryKey(sid), "")
+      if (raw) {
+        const arr = JSON.parse(String(raw)) as SubEntry[]
+        for (const e of arr) m.set(e.id, e)
+      }
+    } catch {}
+    return m
+  }
+
+  let persistTimer: ReturnType<typeof setTimeout> | undefined
+  const persistToKv = (sid: string, entries: Map<string, SubEntry>) => {
+    clearTimeout(persistTimer)
+    persistTimer = setTimeout(() => {
+      try { props.api.kv.set(kvEntryKey(sid), JSON.stringify([...entries.values()])) } catch {}
+    }, 200)
+  }
+
+  const [entryMap, setEntryMapRaw] = createSignal(loadFromKv(props.sessionId))
+
+  // Wrapped setter — also persists to kv on every mutation
+  const setEntryMap = (
+    arg: Map<string, SubEntry> | ((prev: Map<string, SubEntry>) => Map<string, SubEntry>),
+  ) => {
+    setEntryMapRaw((prev) => {
+      const next = typeof arg === "function" ? (arg as Function)(prev) : arg
+      persistToKv(props.sessionId, next)
+      return next
+    })
+  }
+
   const [panelWidth, setPanelWidth] = createSignal(28)
   const [open, setOpen] = createSignal(true)
   const [expanded, setExpanded] = createSignal<Set<string>>(new Set())
   const [now, setNow] = createSignal(Date.now())
-  const [entryMap, setEntryMap] = createSignal<Map<string, SubEntry>>(new Map())
   const [renderTick, setRenderTick] = createSignal(0)
 
   let boxEl: any
@@ -219,8 +257,8 @@ function SubAgentPanel(props: {
       next.set(partial.id, {
         ...(existing ?? { startedAt: nowTs }),
         ...partial,
-        startedAt: existing?.startedAt ?? partial.startedAt ?? nowTs,
-        endedAt: ended ? (existing?.endedAt ?? nowTs) : undefined,
+        startedAt: existing?.startedAt || partial.startedAt || nowTs,
+        endedAt: ended ? (existing?.endedAt || nowTs) : undefined,
       })
       return next
     })
@@ -240,15 +278,34 @@ function SubAgentPanel(props: {
       const desc = String(part.description ?? "")
       const title = desc || truncate(prompt.replace(/\n/g, " ").replace(/\s+/g, " ").trim(), 40)
       const command = part.command !== undefined ? String(part.command) : undefined
-      const m = part.model as Record<string, unknown> | undefined
-      const model =
-        m
-          ? (m.providerID ?? m.provider ?? m.providerId) && (m.modelID ?? m.model ?? m.modelId)
-            ? `${m.providerID ?? m.provider ?? m.providerId}/${m.modelID ?? m.model ?? m.modelId}`
-            : undefined
-          : undefined
+
+      // model: try part.model first, fallback to parent message (like visual-cache does)
+      // Only keep model name (last / segment), drop provider prefix for narrow sidebar
+      let model: string | undefined
+      const extractModelName = (raw: string) => raw.split("/").pop() ?? raw
+      const pm = part.model as Record<string, unknown> | undefined
+      if (pm) {
+        const mid: unknown = pm.modelID ?? pm.model ?? pm.modelId
+        if (mid) model = extractModelName(String(mid))
+      }
+      if (!model) {
+        const msgID = String(part.messageID ?? "")
+        const sid = String(props_?.sessionID ?? props.sessionId)
+        if (msgID && sid) {
+          try {
+            const msgs = props.api.state.session.messages(sid)
+            const msg = (msgs as any[])?.find((m: any) => String(m.id) === msgID)
+            if (msg) {
+              const mid: unknown = (msg as any).modelID ?? (msg as any).model ?? (msg as any).modelId
+              if (mid) model = extractModelName(String(mid))
+            }
+          } catch {}
+        }
+      }
+
       const id = `sub:${String(part.id ?? crypto.randomUUID())}`
-      upsertEntry({ id, title, agent, prompt, command, model, status: "running" })
+      const subSid = part.sessionID !== undefined ? String(part.sessionID) : undefined
+      upsertEntry({ id, title, agent, prompt, command, model, sessionId: subSid, status: "running" })
     }
 
     // ToolPart
@@ -266,8 +323,26 @@ function SubAgentPanel(props: {
       const desc = input?.description !== undefined ? String(input.description) : ""
       const title = desc || truncate(prompt.replace(/\n/g, " ").replace(/\s+/g, " ").trim(), 40)
       const command = input?.command !== undefined ? String(input.command) : undefined
+
+      // model: fallback to parent message, model name only
+      let model: string | undefined
+      const extractModelName = (raw: string) => raw.split("/").pop() ?? raw
+      const msgID = String(part.messageID ?? "")
+      const sid = String(props_?.sessionID ?? props.sessionId)
+      if (msgID && sid) {
+        try {
+          const msgs = props.api.state.session.messages(sid)
+          const msg = (msgs as any[])?.find((m: any) => String(m.id) === msgID)
+          if (msg) {
+            const mid: unknown = (msg as any).modelID ?? (msg as any).model ?? (msg as any).modelId
+            if (mid) model = extractModelName(String(mid))
+          }
+        } catch {}
+      }
+
       const id = `tool:${String(part.id ?? crypto.randomUUID())}`
-      upsertEntry({ id, title, agent, prompt, command, status })
+      const subSid = part.sessionID !== undefined ? String(part.sessionID) : undefined
+      upsertEntry({ id, title, agent, prompt, command, model, sessionId: subSid, status })
     }
   }
 
@@ -280,7 +355,7 @@ function SubAgentPanel(props: {
       let changed = false
       const next = new Map(prev)
       for (const [id, entry] of next) {
-        if (entry.status === "running" && id.includes(sid)) {
+        if (entry.status === "running" && entry.sessionId === sid) {
           next.set(id, { ...entry, status, endedAt: Date.now() })
           changed = true
         }
@@ -320,102 +395,79 @@ function SubAgentPanel(props: {
   })
 
   // ── session‑switch & initial‑load scan ──
-  // Watches sessionId → clears old entries + rescans messages for the new session.
-  // A brief setTimeout ensures messages are available on first load.
+  // On session change: load from kv (entries survive component unmount), then scan+merge.
+  // On same session: only scan+merge (keep event‑driven running entries).
+  let lastSid = props.sessionId
   createEffect(() => {
     const sid = props.sessionId
+    const switched = sid !== lastSid
+    lastSid = sid
     const t = setTimeout(() => {
       untrack(() => {
-        const next = new Map<string, SubEntry>()
-        try {
-          const msgs = props.api.state.session.messages(sid)
-          if (msgs && (msgs as any[]).length) {
-            for (const msg of msgs) {
-              const parts = props.api.state.part(msg.id) ?? []
-              for (const partRaw of parts) {
-                const part = partRaw as Record<string, unknown>
+        // scan uses setEntryMapRaw — ephemeral data, not persisted to kv.
+        // Only event-driven changes (handlePartUpdated, handleSessionEnd) persist.
+        setEntryMapRaw((prev) => {
+          const next = switched ? loadFromKv(sid) : new Map(prev)
+          try {
+            const extractModelName = (raw: string) => raw.split("/").pop() ?? raw
+            const msgs = props.api.state.session.messages(sid)
+            if (msgs && (msgs as any[]).length) {
+              for (const msg of msgs) {
+                const parts = props.api.state.part(msg.id) ?? []
+                for (const partRaw of parts) {
+                  const part = partRaw as Record<string, unknown>
 
-                if (part.type === "subtask") {
-                  const agent = String(part.agent ?? "?")
-                  const prompt = String(part.prompt ?? "")
-                  const desc = String(part.description ?? "")
-                  const title =
-                    desc ||
-                    truncate(
-                      prompt.replace(/\n/g, " ").replace(/\s+/g, " ").trim(),
-                      40,
-                    )
-                  const command =
-                    part.command !== undefined ? String(part.command) : undefined
-                  const m = part.model as Record<string, unknown> | undefined
-                  const model = m
-                    ? (m.providerID ?? m.provider ?? m.providerId) && (m.modelID ?? m.model ?? m.modelId)
-                      ? `${m.providerID ?? m.provider ?? m.providerId}/${m.modelID ?? m.model ?? m.modelId}`
-                      : undefined
-                    : undefined
-                  const id = `sub:${String(part.id ?? "")}`
-                  if (part.id) {
+                  // Subtask entries are purely event-driven — never created by scan.
+                  // (SubtaskPart exists from spawn, not completion, so we cannot infer status.)
+                  if (part.type === "tool") {
+                    const tool = String((part as any).tool ?? "")
+                    if (tool !== "task" && tool !== "delegate") continue
+                    const id = `tool:${String(part.id ?? "")}`
+                    if (!part.id) continue
+
+                    // Tool part has explicit state.status — only update if we have concrete new info
+                    const st = (part as any).state as Record<string, unknown> | undefined
+                    const rawStatus = String(st?.status ?? "")
+                    let status: SubStatus = "running"
+                    if (rawStatus === "completed") status = "done"
+                    else if (rawStatus === "error") status = "error"
+
+                    const exists = next.get(id)
+                    // Already settled → skip
+                    if (exists && exists.status !== "running") continue
+                    // Running but no new status → skip (don't overwrite with default)
+                    if (exists && status === "running") continue
+
+                    // If already tracked as running but tool state says completed/error → update
+                    // If not tracked → add fresh
+
+                    const input = st?.input as Record<string, unknown> | undefined
+                    const agent = String((part as any).subagent_type ?? input?.subagent_type ?? tool)
+                    const prompt = String(input?.prompt ?? (part as any).description ?? "")
+                    const desc = input?.description !== undefined ? String(input.description) : ""
+                    const title = desc || truncate(prompt.replace(/\n/g, " ").trim(), 40)
+                    const command = input?.command !== undefined ? String(input.command) : undefined
+
+                    let model: string | undefined
+                    const mm = msg as Record<string, unknown>
+                    const mid: unknown = mm.modelID ?? mm.model ?? mm.modelId
+                    if (mid) model = extractModelName(String(mid))
+
+                    const subSid = part.sessionID !== undefined ? String(part.sessionID) : undefined
+                    const ended = status === "done" || status === "error"
                     next.set(id, {
-                      id,
-                      title,
-                      agent,
-                      prompt,
-                      command,
-                      model,
-                      status: "done",
-                      startedAt: 0,
-                      endedAt: 1,
-                    })
-                  }
-                } else if (part.type === "tool") {
-                  const tool = String((part as any).tool ?? "")
-                  if (tool !== "task" && tool !== "delegate") continue
-                  const st = (part as any).state as
-                    | Record<string, unknown>
-                    | undefined
-                  const rawStatus = String(st?.status ?? "")
-                  let status: SubStatus = "done"
-                  if (rawStatus === "error") status = "error"
-                  const input = st?.input as Record<string, unknown> | undefined
-                  const agent = String(
-                    (part as any).subagent_type ?? input?.subagent_type ?? tool,
-                  )
-                  const prompt = String(
-                    input?.prompt ?? (part as any).description ?? "",
-                  )
-                  const desc =
-                    input?.description !== undefined
-                      ? String(input.description)
-                      : ""
-                  const title =
-                    desc ||
-                    truncate(
-                      prompt.replace(/\n/g, " ").trim(),
-                      40,
-                    )
-                  const command =
-                    input?.command !== undefined
-                      ? String(input.command)
-                      : undefined
-                  const id = `tool:${String(part.id ?? "")}`
-                  if (part.id) {
-                    next.set(id, {
-                      id,
-                      title,
-                      agent,
-                      prompt,
-                      command,
+                      id, title, agent, prompt, command, model, sessionId: subSid,
                       status,
-                      startedAt: 0,
-                      endedAt: 1,
+                      startedAt: exists?.startedAt || Date.now(),
+                      endedAt: ended ? (exists?.endedAt || Date.now()) : undefined,
                     })
                   }
                 }
               }
             }
-          }
-        } catch {}
-        setEntryMap(next)
+          } catch {}
+          return next
+        })
         bump()
       })
     }, 150)
