@@ -723,10 +723,17 @@ function SubAgentPanel(props: {
               const isError = entry.status === "error"
               const elapsed = () => (entry.endedAt ?? now()) - entry.startedAt
 
-              const statusDot = () =>
-                isRunning ? (now() % 1000 < 500 ? "\u25cf" : "\u25cb") : "\u25cf"
-              const statusColor = () =>
-                isRunning ? pal().warning : isError ? pal().error : pal().success
+              const statusDot = () => "\u25cf"
+              const statusColor = () => {
+                if (!isRunning) return isError ? pal().error : pal().success
+                const t = (Math.sin(((now() % 2000) / 2000) * Math.PI * 2 - Math.PI / 2) + 1) / 2
+                const a = rgb(pal().muted), b = rgb(pal().warning)
+                if (!a || !b) return pal().warning
+                const r = Math.round(a.r + (b.r - a.r) * t)
+                const g = Math.round(a.g + (b.g - a.g) * t)
+                const bl = Math.round(a.b + (b.b - a.b) * t)
+                return "#" + [r, g, bl].map((v) => Math.max(0, Math.min(255, v)).toString(16).padStart(2, "0")).join("")
+              }
 
               const timeColor = () =>
                 isRunning ? pal().warning : isError ? pal().error : pal().muted
