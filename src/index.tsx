@@ -373,7 +373,13 @@ function SubAgentPanel(props: {
       let status: SubStatus = "running"
       if (rawStatus === "completed") status = "done"
       // Background tasks: tool completion ≠ agent completion — keep running until session.idle
-      if (input?.run_in_background === true && status === "done") status = "running"
+      // Only keep running if state metadata confirms a child session was spawned;
+      // otherwise (failed spawn, invalid agent) mark as done so the entry isn't stuck forever.
+      if (input?.run_in_background === true && status === "done") {
+        const stMetaCheck = st?.metadata as Record<string, unknown> | undefined
+        const hasChild = stMetaCheck?.session_id !== undefined || stMetaCheck?.sessionId !== undefined
+        if (hasChild) status = "running"
+      }
 
       const agent = String((part as any).subagent_type ?? input?.subagent_type ?? input?.category ?? tool)
       const prompt = String(input?.prompt ?? (part as any).description ?? "")
@@ -381,9 +387,12 @@ function SubAgentPanel(props: {
       const title = desc || truncate(prompt.replace(/\n/g, " ").replace(/\s+/g, " ").trim(), 40)
 
       const id = `tool:${String(part.id ?? crypto.randomUUID())}`
-      const meta = (part as any).metadata as Record<string, unknown> | undefined
-      const subSid = (part as any).sessionID !== undefined ? String((part as any).sessionID)
-        : (meta?.sessionId as string | undefined) ?? undefined
+      // Child session ID lives in state-level metadata (ToolStateCompleted.metadata),
+      // injected by the tool executor.  ToolPart.sessionID is the parent session.
+      const stMeta = st?.metadata as Record<string, unknown> | undefined
+      const subSid = stMeta?.session_id !== undefined ? String(stMeta.session_id)
+        : stMeta?.sessionId !== undefined ? String(stMeta.sessionId)
+        : undefined
       upsertEntry({ id, title, agent, prompt, sessionId: subSid, status })
     }
   }
@@ -589,7 +598,12 @@ function SubAgentPanel(props: {
                     let status: SubStatus = "running"
                     if (rawStatus === "completed") status = "done"
                     // Background tasks: tool completion ≠ agent completion — keep running until session.idle
-                    if ((st?.input as Record<string, unknown> | undefined)?.run_in_background === true && status === "done") status = "running"
+                    // Only keep running if state metadata confirms a child session was spawned.
+                    if ((st?.input as Record<string, unknown> | undefined)?.run_in_background === true && status === "done") {
+                      const scanStMeta = st?.metadata as Record<string, unknown> | undefined
+                      const scanHasChild = scanStMeta?.session_id !== undefined || scanStMeta?.sessionId !== undefined
+                      if (scanHasChild) status = "running"
+                    }
 
                     // Already settled → skip
                     if (exists && exists.status !== "running") continue
@@ -620,7 +634,10 @@ function SubAgentPanel(props: {
                     const title = desc || truncate(prompt.replace(/\n/g, " ").trim(), 40)
 
                     let tokens: number | undefined
-                    const scanSubSid = part.sessionID !== undefined ? String(part.sessionID) : undefined
+                    const scanStMeta2 = st?.metadata as Record<string, unknown> | undefined
+                    const scanSubSid = scanStMeta2?.session_id !== undefined ? String(scanStMeta2.session_id)
+                      : scanStMeta2?.sessionId !== undefined ? String(scanStMeta2.sessionId)
+                      : undefined
                     if (scanSubSid) tokens = readSessionTokens(scanSubSid)
 
                     const ended = status === "done"  // "error" handled above, never reaches here
