@@ -43,6 +43,9 @@ interface SubEntry {
 
 type Lang = "zh" | "en"
 
+/** OpenCode built-in tool names that spawn sub-agents or delegate tasks. */
+const SUBAGENT_TOOLS = new Set(["task", "delegate", "call_omo_agent"])
+
 // ===================================================================
 // i18n
 // ===================================================================
@@ -279,10 +282,15 @@ function SubAgentPanel(props: {
     }
   }
 
-  /** Sum USD cost from a session's assistant messages. */
+  /** Sum USD cost from a session's messages.
+   *  Prefers the database-level aggregate (`session.cost`) which is not affected
+   *  by the sync layer's `limit: 100` message window.  Falls back to message
+   *  traversal when the aggregate is unavailable (older SDK versions). */
   const readSessionCost = (sid: string): number | undefined => {
     if (!sid) return undefined
     try {
+      const session = props.api.state.session.get(sid)
+      if (session?.cost != null && session.cost > 0) return session.cost
       const msgs = props.api.state.session.messages(sid)
       if (!msgs) return undefined
       let total = 0
@@ -337,20 +345,24 @@ function SubAgentPanel(props: {
     // ToolPart
     if (part.type === "tool") {
       const tool = String(part.tool ?? "")
-      if (tool !== "task" && tool !== "delegate") return
+      if (!SUBAGENT_TOOLS.has(tool)) return
       const st = part.state as Record<string, unknown> | undefined
       const rawStatus = String(st?.status ?? "")
       let status: SubStatus = "running"
       if (rawStatus === "completed") status = "done"
       else if (rawStatus === "error") status = "error"
       const input = st?.input as Record<string, unknown> | undefined
-      const agent = String(part.subagent_type ?? input?.subagent_type ?? tool)
-      const prompt = String(input?.prompt ?? part.description ?? "")
+      // Background tasks: tool completion ≠ agent completion — keep running until session.idle
+      if (input?.run_in_background === true && status === "done") status = "running"
+      const agent = String((part as any).subagent_type ?? input?.subagent_type ?? input?.category ?? tool)
+      const prompt = String(input?.prompt ?? (part as any).description ?? "")
       const desc = input?.description !== undefined ? String(input.description) : ""
       const title = desc || truncate(prompt.replace(/\n/g, " ").replace(/\s+/g, " ").trim(), 40)
 
       const id = `tool:${String(part.id ?? crypto.randomUUID())}`
-      const subSid = part.sessionID !== undefined ? String(part.sessionID) : undefined
+      const meta = (part as any).metadata as Record<string, unknown> | undefined
+      const subSid = (part as any).sessionID !== undefined ? String((part as any).sessionID)
+        : (meta?.sessionId as string | undefined) ?? undefined
       upsertEntry({ id, title, agent, prompt, sessionId: subSid, status })
     }
   }
@@ -390,29 +402,58 @@ function SubAgentPanel(props: {
       let changed = false
       const next = new Map(prev)
       for (const [id, entry] of next) {
-        if (entry.status === "running" && entry.sessionId === sid) {
-          next.set(id, {
-            ...entry, status, endedAt: Date.now(),
-            tokens: entry.tokens ?? sessionTokens,
-            cost: entry.cost ?? sessionCost,
+        if (entry.sessionId !== sid) continue
+        if (entry.status !== "running" && entry.status !== "done") continue
+        // Skip parent session idle — subagent entries belong to child sessions only
+        if (sid === props.sessionId) continue
+        // For "done" entries (sync tasks completed before session.idle), only backfill tokens/cost
+        const alreadySettled = entry.status !== "running"
+        next.set(id, {
+          ...entry,
+          ...(alreadySettled ? {} : { status, endedAt: Date.now() }),
+          tokens: entry.tokens ?? sessionTokens,
+          cost: entry.cost ?? sessionCost,
+          error: errorMsg || entry.error,
+        })
+        changed = true
+      }
+      if (!changed && sessionAgent && (sessionTokens || sessionCost || errorMsg)) {
+        const nowTs = Date.now()
+        const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9-]/g, "")
+        const saNorm = normalize(sessionAgent)
+        let best: { id: string; gap: number } | null = null
+
+        // Phase 1: try matching by agent name（agent 名有交集）
+        for (const [id, entry] of next) {
+          if (entry.status !== "running") continue
+          const eaNorm = normalize(entry.agent)
+          if (!eaNorm || !saNorm) continue
+          if (!eaNorm.includes(saNorm) && !saNorm.includes(eaNorm)) continue
+          const gap = Math.abs((entry.startedAt || 0) - nowTs)
+          if (!best || gap < best.gap) best = { id, gap }
+        }
+
+        // Phase 2: if agent name has no overlap (e.g. category calls: agent="deep" vs sessionAgent="Sisyphus-Junior"),
+        // fall back to time proximity for entries that have no sessionId yet
+        if (!best) {
+          for (const [id, entry] of next) {
+            if (entry.status !== "running") continue
+            if (entry.sessionId) continue
+            const gap = Math.abs((entry.startedAt || 0) - nowTs)
+            if (!best || gap < best.gap) best = { id, gap }
+          }
+        }
+
+        if (best) {
+          const entry = next.get(best.id)!
+          next.set(best.id, {
+            ...entry, status, endedAt: nowTs,
+            tokens: sessionTokens || entry.tokens,
+            cost: sessionCost || entry.cost,
+            sessionId: sid,
             error: errorMsg || entry.error,
           })
           changed = true
-        }
-      }
-      if (!changed && sessionAgent && (sessionTokens || sessionCost || errorMsg)) {
-        for (const [id, entry] of next) {
-          if (entry.status === "running" && entry.agent === sessionAgent) {
-            next.set(id, {
-              ...entry, status, endedAt: Date.now(),
-              tokens: sessionTokens || entry.tokens,
-              cost: sessionCost || entry.cost,
-              sessionId: sid,
-              error: errorMsg || entry.error,
-            })
-            changed = true
-            break
-          }
         }
       }
       return changed ? next : prev
@@ -423,26 +464,6 @@ function SubAgentPanel(props: {
   const bump = () => setRenderTick((v) => v + 1)
 
   onMount(() => {
-    // Restore expanded entries — poll kv.ready like visual-cache
-    const restoreExpanded = () => {
-      try {
-        const saved = props.api.kv.get<Record<string, boolean>>(`${KV_PREFIX}.expanded_map.${props.sessionId}`, {})
-        const set = new Set<string>()
-        for (const [id, v] of Object.entries(saved)) { if (v) set.add(id) }
-        if (set.size > 0) setExpanded(set)
-      } catch {}
-    }
-    if (props.api.kv.ready) {
-      restoreExpanded()
-    } else {
-      let tries = 0
-      const poll = setInterval(() => {
-        if (props.api.kv.ready || ++tries > 100) {
-          clearInterval(poll)
-          restoreExpanded()
-        }
-      }, 10)
-    }
     // Fast clock for smooth time display, separate from token polling
     const clock = setInterval(() => { setNow(Date.now()); bump() }, 100)
     // Token poll — runs every 500ms for running entries
@@ -524,7 +545,7 @@ function SubAgentPanel(props: {
                   // (SubtaskPart exists from spawn, not completion, so we cannot infer status.)
                   if (part.type === "tool") {
                     const tool = String((part as any).tool ?? "")
-                    if (tool !== "task" && tool !== "delegate") continue
+                    if (!SUBAGENT_TOOLS.has(tool)) continue
                     const id = `tool:${String(part.id ?? "")}`
                     if (!part.id) continue
 
@@ -534,6 +555,8 @@ function SubAgentPanel(props: {
                     let status: SubStatus = "running"
                     if (rawStatus === "completed") status = "done"
                     else if (rawStatus === "error") status = "error"
+                    // Background tasks: tool completion ≠ agent completion — keep running until session.idle
+                    if ((st?.input as Record<string, unknown> | undefined)?.run_in_background === true && status === "done") status = "running"
 
                     const exists = next.get(id)
                     // Already settled → skip
@@ -627,10 +650,6 @@ function SubAgentPanel(props: {
       else next.add(id)
       return next
     })
-    // Persist outside setter — Solid may defer callbacks
-    const map: Record<string, boolean> = {}
-    for (const eid of expanded()) map[eid] = true
-    try { props.api.kv.set(`${KV_PREFIX}.expanded_map.${props.sessionId}`, map) } catch {}
   }
 
   const sep = () => "\u2500".repeat(Math.max(1, panelWidth()))
