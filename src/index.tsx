@@ -561,8 +561,24 @@ function SubAgentPanel(props: {
                     const exists = next.get(id)
                     // Already settled → skip
                     if (exists && exists.status !== "running") continue
-                    // Running but no new status → skip (don't overwrite with default)
-                    if (exists && status === "running") continue
+                    // Running entry with no status improvement from part:
+                    // try message-level heuristics first, then time-based fallback.
+                    // Otherwise historical sub-agents restored from KV stay "running" forever
+                    // because api.state.part() may return empty state for past messages.
+                    if (exists && status === "running") {
+                      if (!rawStatus) {
+                        const msgTokens = (msg as any)?.tokens as Record<string, unknown> | undefined
+                        if (msgTokens && (Number(msgTokens.input) > 0 || Number(msgTokens.output) > 0)) {
+                          status = "done"  // LLM returned tokens → agent completed
+                        } else if (Date.now() - exists.startedAt > 30 * 60 * 1000) {
+                          status = "done"  // >30 min idle → assume completed
+                        } else {
+                          continue
+                        }
+                      } else {
+                        continue
+                      }
+                    }
 
                     // If already tracked as running but tool state says completed/error → update
                     // If not tracked → add fresh
