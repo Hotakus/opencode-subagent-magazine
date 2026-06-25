@@ -269,7 +269,10 @@ function SubAgentPanel(props: {
     (() => { try { return props.api.kv.get(expandedKey, "") || undefined } catch { return undefined } })()
   )
   const [hoveredOpen, setHoveredOpen] = createSignal<string | undefined>(undefined)
-  const [scrollOffset, setScrollOffset] = createSignal(0)
+  const scrollKey = `${KV_PREFIX}.scroll.${props.sessionId}`
+  const [scrollOffset, setScrollOffset] = createSignal(
+    (() => { try { return props.api.kv.get(scrollKey, 0) as number } catch { return 0 } })()
+  )
   const [now, setNow] = createSignal(Date.now())
   const [renderTick, setRenderTick] = createSignal(0)
 
@@ -623,7 +626,10 @@ function SubAgentPanel(props: {
     lastSid = sid
     const t = setTimeout(() => {
       untrack(() => {
-        if (switched) setScrollOffset(0)
+        if (switched) {
+          const saved = (() => { try { return props.api.kv.get(`${KV_PREFIX}.scroll.${sid}`, 0) as number } catch { return 0 } })()
+          setScrollOffset(saved)
+        }
         // scan uses setEntryMapRaw — ephemeral data, not persisted to kv.
         // Only event-driven changes (handlePartUpdated, handleSessionEnd) persist.
         setEntryMapRaw((prev) => {
@@ -898,8 +904,9 @@ function SubAgentPanel(props: {
               if (total <= m) return
               const dir = e.button === 0 ? 1 : -1
               setScrollOffset((prev) => {
-                const next = prev + dir
-                return Math.max(0, Math.min(next, total - m))
+                const next = Math.max(0, Math.min(prev + dir, total - m))
+                try { props.api.kv.set(scrollKey, next) } catch {}
+                return next
               })
             }}
           >
