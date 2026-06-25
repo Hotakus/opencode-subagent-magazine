@@ -266,6 +266,7 @@ function SubAgentPanel(props: {
   const [open, setOpen] = createSignal(true)
   const [expanded, setExpanded] = createSignal<Set<string>>(new Set())
   const [hoveredOpen, setHoveredOpen] = createSignal<string | undefined>(undefined)
+  const [scrollOffset, setScrollOffset] = createSignal(0)
   const [now, setNow] = createSignal(Date.now())
   const [renderTick, setRenderTick] = createSignal(0)
 
@@ -619,6 +620,7 @@ function SubAgentPanel(props: {
     lastSid = sid
     const t = setTimeout(() => {
       untrack(() => {
+        if (switched) setScrollOffset(0)
         // scan uses setEntryMapRaw — ephemeral data, not persisted to kv.
         // Only event-driven changes (handlePartUpdated, handleSessionEnd) persist.
         setEntryMapRaw((prev) => {
@@ -744,8 +746,16 @@ function SubAgentPanel(props: {
     return [...entryMap().values()].sort((a, b) => b.startedAt - a.startedAt)
   })
 
-  const visibleList = createMemo(() => entryList().slice(0, props.maxEntries()))
-  const hiddenCount = createMemo(() => Math.max(0, entryList().length - props.maxEntries()))
+  const max = props.maxEntries
+  const clampedOffset = createMemo(() => {
+    const total = entryList().length
+    const m = max()
+    if (total <= m) return 0
+    return Math.min(scrollOffset(), total - m)
+  })
+  const visibleList = createMemo(() => entryList().slice(clampedOffset(), clampedOffset() + max()))
+  const hiddenAbove = createMemo(() => clampedOffset())
+  const hiddenBelow = createMemo(() => Math.max(0, entryList().length - clampedOffset() - max()))
 
   const entries = createMemo(() => {
     const nowVal = now()
@@ -879,8 +889,25 @@ function SubAgentPanel(props: {
             </text>
           }
         >
-          <For each={visibleList()}>
-            {(entry) => {
+          <box
+            onMouseScroll={(e) => {
+              const total = entryList().length
+              const m = max()
+              if (total <= m) return
+              const dir = e.button === 0 ? 1 : -1
+              setScrollOffset((prev) => {
+                const next = prev + dir
+                return Math.max(0, Math.min(next, total - m))
+              })
+            }}
+          >
+            <Show when={hiddenAbove() > 0}>
+              <text style={{ fg: pal().muted }}>
+                {"  "}&uarr; {hiddenAbove()} more
+              </text>
+            </Show>
+            <For each={visibleList()}>
+              {(entry) => {
               const isExpanded = () => expanded().has(entry.id)
               const isRunning = entry.status === "running"
               const isError = entry.status === "error"
@@ -1084,12 +1111,13 @@ function SubAgentPanel(props: {
                 </>
               )
             }}
-          </For>
-          <Show when={hiddenCount() > 0}>
-            <text style={{ fg: pal().muted }}>
-              &hellip;and {hiddenCount()} more
-            </text>
-          </Show>
+            </For>
+            <Show when={hiddenBelow() > 0}>
+              <text style={{ fg: pal().muted }}>
+                {"  "}&darr; {hiddenBelow()} more
+              </text>
+            </Show>
+          </box>
         </Show>
       </Show>
     </box>
