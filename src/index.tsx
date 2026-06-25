@@ -39,6 +39,9 @@ interface SubEntry {
   sessionId?: string
   startedAt: number
   endedAt?: number
+  model?: string
+  todoTotal?: number
+  todoDone?: number
 }
 
 type Lang = "zh" | "en"
@@ -52,7 +55,7 @@ const SUBAGENT_TOOLS = new Set(["task", "delegate", "call_omo_agent"])
 
 const I18N: Record<Lang, Record<string, string>> = {
   zh: {
-    "panel.title": "子任务",
+    "panel.title": "子代理",
     "status.none": "暂无子任务",
     "prompt.label": "描述",
     "agent.label": "代理",
@@ -60,6 +63,10 @@ const I18N: Record<Lang, Record<string, string>> = {
     "tokens.label": "上下文",
     "session.label": "会话",
     "error.label": "错误",
+    "model.label": "模型",
+    "todo.label": "进度",
+    "open.label": "进入会话",
+    "cost.label": "费用",
   },
   en: {
     "panel.title": "Sub-Agents",
@@ -70,6 +77,10 @@ const I18N: Record<Lang, Record<string, string>> = {
     "tokens.label": "context",
     "session.label": "session",
     "error.label": "error",
+    "model.label": "model",
+    "todo.label": "todo",
+    "open.label": "Open session",
+    "cost.label": "cost",
   },
 }
 
@@ -254,6 +265,7 @@ function SubAgentPanel(props: {
   const [panelWidth, setPanelWidth] = createSignal(28)
   const [open, setOpen] = createSignal(true)
   const [expanded, setExpanded] = createSignal<Set<string>>(new Set())
+  const [hoveredOpen, setHoveredOpen] = createSignal<string | undefined>(undefined)
   const [now, setNow] = createSignal(Date.now())
   const [renderTick, setRenderTick] = createSignal(0)
 
@@ -305,6 +317,40 @@ function SubAgentPanel(props: {
     }
   }
 
+  /** Last assistant message's modelID for a sub-agent session. */
+  const readSessionModel = (sid: string): string | undefined => {
+    if (!sid) return undefined
+    try {
+      const msgs = props.api.state.session.messages(sid)
+      if (msgs) {
+        for (let i = (msgs as any[]).length - 1; i >= 0; i--) {
+          const m = (msgs as any[])[i]
+          if (m.role === "assistant" && m.modelID) return String(m.modelID)
+        }
+      }
+      return undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  /** Todo completion stats for a sub-agent session.
+   *  `done` counts completed + cancelled items. */
+  const readSessionTodo = (sid: string): { total: number; done: number } | undefined => {
+    if (!sid) return undefined
+    try {
+      const todos = props.api.state.session.todo(sid)
+      if (!todos || todos.length === 0) return undefined
+      let done = 0
+      for (const t of todos) {
+        if (t.status === "completed" || t.status === "cancelled") done++
+      }
+      return { total: todos.length, done }
+    } catch {
+      return undefined
+    }
+  }
+
   // ── upsert ──
   const upsertEntry = (
     partial: Omit<SubEntry, "startedAt" | "endedAt"> & { startedAt?: number }
@@ -341,7 +387,9 @@ function SubAgentPanel(props: {
 
       const id = `sub:${String(part.id ?? crypto.randomUUID())}`
       const subSid = part.sessionID !== undefined ? String(part.sessionID) : undefined
-      upsertEntry({ id, title, agent, prompt, sessionId: subSid, status: "running" })
+      const partModel = part.model as { modelID?: string } | undefined
+      const modelId = partModel?.modelID ? String(partModel.modelID) : undefined
+      upsertEntry({ id, title, agent, prompt, sessionId: subSid, status: "running", model: modelId })
     }
 
     // ToolPart
@@ -405,6 +453,8 @@ function SubAgentPanel(props: {
 
     const sessionTokens = readSessionTokens(sid)
     const sessionCost = readSessionCost(sid)
+    const sessionModel = readSessionModel(sid)
+    const sessionTodo = readSessionTodo(sid)
     let sessionAgent: string | undefined
     let errorMsg: string | undefined
     try {
@@ -443,6 +493,9 @@ function SubAgentPanel(props: {
           ...(alreadySettled ? {} : { status, endedAt: Date.now() }),
           tokens: entry.tokens ?? sessionTokens,
           cost: entry.cost ?? sessionCost,
+          model: entry.model ?? sessionModel,
+          todoTotal: entry.todoTotal ?? sessionTodo?.total,
+          todoDone: entry.todoDone ?? sessionTodo?.done,
           error: errorMsg || entry.error,
         })
         changed = true
@@ -512,10 +565,17 @@ function SubAgentPanel(props: {
               } catch {}
               if (!isChild) continue
               const total = readSessionTokens(entry.sessionId)
-              if (total !== undefined && total !== entry.tokens) {
-                next.set(id, { ...entry, tokens: total })
-                changed = true
+              const todo = readSessionTodo(entry.sessionId)
+              const model = entry.model ?? readSessionModel(entry.sessionId)
+              const nextEntry: SubEntry = { ...entry }
+              if (total !== undefined && total !== entry.tokens) { nextEntry.tokens = total; changed = true }
+              if (todo !== undefined) {
+                if (todo.total !== entry.todoTotal || todo.done !== entry.todoDone) {
+                  nextEntry.todoTotal = todo.total; nextEntry.todoDone = todo.done; changed = true
+                }
               }
+              if (model && !entry.model) { nextEntry.model = model; changed = true }
+              if (changed) next.set(id, nextEntry)
             }
           }
           return changed ? next : prev
@@ -706,6 +766,12 @@ function SubAgentPanel(props: {
     return sum
   })
 
+  const totalCost = createMemo(() => {
+    let sum = 0
+    for (const e of entryList()) { if (e.cost) sum += e.cost }
+    return sum
+  })
+
   const toggleExpand = (id: string) => {
     setExpanded((prev) => {
       const next = new Set(prev)
@@ -721,18 +787,19 @@ function SubAgentPanel(props: {
   const summaryParts = createMemo(() => {
     if (!anyEntry()) return null
     const dot = "\u25cf"
+    const cost = totalCost()
     return {
       done: `${dot}${doneCount()}`,
       running: runningCount() > 0 ? `${dot}${runningCount()}` : null,
       err: errCount() > 0 ? `${dot}${errCount()}` : null,
       duration: totalTokens() > 0 ? fmtTokens(totalTokens()) : "",
+      cost: cost > 0 ? `$${cost.toFixed(2)}` : "",
     }
   })
 
   const leftCols = createMemo(() => {
     const icon = open() ? "\u25bc" : "\u25b6"
-    const ver = open() ? ` v${PLUGIN_VERSION}` : ""
-    return visualWidth(icon) + 1 + visualWidth(t("panel.title")) + visualWidth(ver)
+    return visualWidth(icon) + 1 + visualWidth(t("panel.title"))
   })
 
   const summaryCols = createMemo(() => {
@@ -742,12 +809,13 @@ function SubAgentPanel(props: {
     if (p.running) w += 1 + visualWidth(p.running)
     if (p.err) w += 1 + visualWidth(p.err)
     w += p.duration ? 1 + visualWidth(p.duration) : 0
+    w += p.cost ? 1 + visualWidth(p.cost) : 0
     return w
   })
 
   const spacerCols = createMemo(() => {
     if (!anyEntry()) return 0
-    return Math.max(1, panelWidth() - leftCols() - summaryCols())
+    return Math.max(0, panelWidth() - leftCols() - summaryCols())
   })
 
   const valueCols = (label: string) =>
@@ -779,7 +847,6 @@ function SubAgentPanel(props: {
       >
         <span style={{ fg: pal().muted }}>{renderTick() >= 0 && open() ? "\u25bc " : "\u25b6 "}</span>
         <span style={{ fg: pal().primary }}>{t("panel.title")}</span>
-        <span style={{ fg: pal().border }}>{open() ? ` v${PLUGIN_VERSION}` : ""}</span>
         {anyEntry() ? (
           <>
             <span style={{ fg: pal().muted }}>{" ".repeat(spacerCols())}</span>
@@ -792,6 +859,9 @@ function SubAgentPanel(props: {
             )}
             {summaryParts()!.duration ? (
               <span style={{ fg: pal().muted }}> {summaryParts()!.duration}</span>
+            ) : null}
+            {summaryParts()!.cost ? (
+              <span style={{ fg: pal().warning }}> {summaryParts()!.cost}</span>
             ) : null}
           </>
         ) : null}
@@ -926,8 +996,22 @@ function SubAgentPanel(props: {
                     <Show when={entry.cost !== undefined}>
                       <text>
                         {"  "}
-                        <span style={{ fg: pal().primary }}>cost: </span>
+                        <span style={{ fg: pal().primary }}>{t("cost.label")}: </span>
                         <span style={{ fg: pal().muted }}>${entry.cost!.toFixed(4)}</span>
+                      </text>
+                    </Show>
+                    <Show when={entry.model}>
+                      <text>
+                        {"  "}
+                        <span style={{ fg: pal().primary }}>{t("model.label")}: </span>
+                        <span style={{ fg: pal().muted }}>{truncate(entry.model!, Math.max(6, panelWidth() - 2 - visualWidth(t("model.label") + ": ")))}</span>
+                      </text>
+                    </Show>
+                    <Show when={entry.todoTotal !== undefined}>
+                      <text>
+                        {"  "}
+                        <span style={{ fg: pal().primary }}>{t("todo.label")}: </span>
+                        <span style={{ fg: pal().muted }}>{entry.todoDone}/{entry.todoTotal}</span>
                       </text>
                     </Show>
                     <Show when={entry.prompt}>
@@ -980,6 +1064,21 @@ function SubAgentPanel(props: {
                           </>
                         )
                       })()}
+                    </Show>
+                    <Show when={entry.sessionId}>
+                      <text
+                        onMouseOver={() => setHoveredOpen(entry.id)}
+                        onMouseOut={() => setHoveredOpen(undefined)}
+                        onMouseUp={() => {
+                          if (entry.sessionId) {
+                            props.api.route.navigate("session", { sessionID: entry.sessionId })
+                          }
+                        }}
+                      >
+                        {"  "}
+                        <span style={{ fg: hoveredOpen() === entry.id ? pal().warning : pal().primary }}>{"\u2192 "}</span>
+                        <span style={{ fg: hoveredOpen() === entry.id ? pal().warning : pal().primary }}>{t("open.label")}</span>
+                      </text>
                     </Show>
                   </Show>
                 </>
@@ -1093,6 +1192,16 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             }}
           />
         ))
+      },
+    },
+    {
+      title: "Sub-Agent Monitor: Version",
+      value: "subagent-version",
+      description: "Show plugin version",
+      slash: { name: "subagent-version" },
+      onSelect: (dialog) => {
+        api.ui.toast({ message: `opencode-subagent-monitor v${PLUGIN_VERSION}` })
+        dialog?.clear()
       },
     },
   ])
