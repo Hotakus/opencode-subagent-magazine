@@ -264,7 +264,7 @@ function SubAgentPanel(props: {
 
   const [panelWidth, setPanelWidth] = createSignal(28)
   const [open, setOpen] = createSignal(true)
-  const [expanded, setExpanded] = createSignal<Set<string>>(new Set())
+  const [expanded, setExpanded] = createSignal<string | undefined>(undefined)
   const [hoveredOpen, setHoveredOpen] = createSignal<string | undefined>(undefined)
   const [scrollOffset, setScrollOffset] = createSignal(0)
   const [now, setNow] = createSignal(Date.now())
@@ -783,12 +783,7 @@ function SubAgentPanel(props: {
   })
 
   const toggleExpand = (id: string) => {
-    setExpanded((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
+    setExpanded((prev) => (prev === id ? undefined : id))
   }
 
   const sep = () => "\u2500".repeat(Math.max(1, panelWidth()))
@@ -908,7 +903,7 @@ function SubAgentPanel(props: {
             </Show>
             <For each={visibleList()}>
               {(entry) => {
-              const isExpanded = () => expanded().has(entry.id)
+              const isExpanded = () => expanded() === entry.id
               const isRunning = entry.status === "running"
               const isError = entry.status === "error"
               const elapsed = () => (entry.endedAt ?? now()) - entry.startedAt
