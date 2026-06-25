@@ -282,16 +282,15 @@ function SubAgentPanel(props: {
   const [renderTick, setRenderTick] = createSignal(0)
 
   let boxEl: any
+  let disposed = false
 
   /** Total context tokens for a sub-agent session.
-   *  Matches opencode-visual-cache's "总计": last assistant message's input + cache.read.
-   *  Only succeeds when sid points to a valid session with token data. */
+   *  Matches opencode-visual-cache's "总计": last assistant message's input + cache.read. */
   const readSessionTokens = (sid: string): number | undefined => {
     if (!sid) return undefined
     try {
       const msgs = props.api.state.session.messages(sid)
       if (msgs) {
-        // Walk backwards to find the last assistant message with token data
         for (let i = (msgs as any[]).length - 1; i >= 0; i--) {
           const m = (msgs as any[])[i]
           if (m.role !== "assistant") continue
@@ -553,6 +552,35 @@ function SubAgentPanel(props: {
       }
       return changed ? next : prev
     })
+
+    // Delayed backfill: re-read data after state sync catches up, to capture the final
+    // token/cost values that may not have been available when session.idle fired.
+    setTimeout(() => {
+      if (disposed) return
+      const finalTokens = readSessionTokens(sid)
+      const finalCost = readSessionCost(sid)
+      const finalModel = readSessionModel(sid)
+      const finalTodo = readSessionTodo(sid)
+      setEntryMap((prev) => {
+        let changed = false
+        const next = new Map(prev)
+        for (const [id, entry] of next) {
+          if (entry.sessionId !== sid) continue
+          const t = finalTokens ?? entry.tokens
+          const c = finalCost ?? entry.cost
+          const m = finalModel ?? entry.model
+          const tt = finalTodo?.total ?? entry.todoTotal
+          const td = finalTodo?.done ?? entry.todoDone
+          if (t !== entry.tokens || c !== entry.cost || m !== entry.model ||
+              tt !== entry.todoTotal || td !== entry.todoDone) {
+            next.set(id, { ...entry, tokens: t, cost: c, model: m, todoTotal: tt, todoDone: td })
+            changed = true
+          }
+        }
+        return changed ? next : prev
+      })
+      bump()
+    }, 150)
   }
 
   // ── bumpRenderTick: force re-render (visual-cache pattern) ──
@@ -612,6 +640,7 @@ function SubAgentPanel(props: {
     })
 
     onCleanup(() => {
+      disposed = true
       clearInterval(clock)
       clearInterval(tokenTimer)
       unsubPart()
