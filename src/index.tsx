@@ -264,7 +264,10 @@ function SubAgentPanel(props: {
 
   const [panelWidth, setPanelWidth] = createSignal(28)
   const [open, setOpen] = createSignal(true)
-  const [expanded, setExpanded] = createSignal<string | undefined>(undefined)
+  const expandedKey = `${KV_PREFIX}.expanded.${props.sessionId}`
+  const [expanded, setExpanded] = createSignal<string | undefined>(
+    (() => { try { return props.api.kv.get(expandedKey, "") || undefined } catch { return undefined } })()
+  )
   const [hoveredOpen, setHoveredOpen] = createSignal<string | undefined>(undefined)
   const [scrollOffset, setScrollOffset] = createSignal(0)
   const [now, setNow] = createSignal(Date.now())
@@ -783,7 +786,11 @@ function SubAgentPanel(props: {
   })
 
   const toggleExpand = (id: string) => {
-    setExpanded((prev) => (prev === id ? undefined : id))
+    setExpanded((prev) => {
+      const next = prev === id ? undefined : id
+      try { props.api.kv.set(expandedKey, next ?? "") } catch {}
+      return next
+    })
   }
 
   const sep = () => "\u2500".repeat(Math.max(1, panelWidth()))
