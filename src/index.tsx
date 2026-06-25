@@ -212,6 +212,11 @@ const FALLBACK = {
 
 const MAX_SAT = 0.28
 
+/** Entry line left prefix: icon + space + status dot + space */
+const LEFT_PAD = 4
+/** Detail row indent: two spaces */
+const INDENT = 2
+
 // ===================================================================
 // Sidebar component
 // ===================================================================
@@ -837,7 +842,7 @@ function SubAgentPanel(props: {
   })
 
   const valueCols = (label: string) =>
-    Math.max(4, panelWidth() - 2 - visualWidth(label + ": "))
+    Math.max(4, panelWidth() - INDENT - visualWidth(label + ": "))
 
   // ── render ──
   return (
@@ -954,7 +959,7 @@ function SubAgentPanel(props: {
                 if (tk) w += visualWidth(tk)
                 return w
               }
-              const labelAvail = () => Math.max(6, panelWidth() - 4 - suffixW())
+              const labelAvail = () => Math.max(6, panelWidth() - LEFT_PAD - suffixW())
               const labelText = () => {
                 const max = labelAvail()
                 const text = entry.title || entry.agent
@@ -1019,7 +1024,7 @@ function SubAgentPanel(props: {
                       <text>
                         {"  "}
                         <span style={{ fg: pal().error }}>{t("error.label")}: </span>
-                        <span style={{ fg: pal().error }}>{truncate(entry.error!, Math.max(6, panelWidth() - 2 - visualWidth(t("error.label") + ": ")))}</span>
+                        <span style={{ fg: pal().error }}>{truncate(entry.error!, Math.max(6, panelWidth() - INDENT - visualWidth(t("error.label") + ": ")))}</span>
                       </text>
                     </Show>
                     <Show when={entry.cost !== undefined}>
@@ -1033,7 +1038,7 @@ function SubAgentPanel(props: {
                       <text>
                         {"  "}
                         <span style={{ fg: pal().primary }}>{t("model.label")}: </span>
-                        <span style={{ fg: pal().muted }}>{truncate(entry.model!, Math.max(6, panelWidth() - 2 - visualWidth(t("model.label") + ": ")))}</span>
+                        <span style={{ fg: pal().muted }}>{truncate(entry.model!, Math.max(6, panelWidth() - INDENT - visualWidth(t("model.label") + ": ")))}</span>
                       </text>
                     </Show>
                     <Show when={entry.todoTotal !== undefined}>
@@ -1050,7 +1055,7 @@ function SubAgentPanel(props: {
                           .replace(/\s+/g, " ")
                           .trim()
                         const labelW = visualWidth(t("prompt.label") + ": ")
-                        const cap1 = panelWidth() - 2 - labelW
+                        const cap1 = panelWidth() - INDENT - labelW
                         if (visualWidth(raw) <= cap1) {
                           return (
                             <text>
@@ -1076,7 +1081,7 @@ function SubAgentPanel(props: {
                         const rest = raw.slice(i1).trimStart()
 
                         // Line 2 — aligned under prompt value, truncated
-                        const cap2 = panelWidth() - 4
+                        const cap2 = panelWidth() - LEFT_PAD
                         return (
                           <>
                             <text>
