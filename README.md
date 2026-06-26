@@ -12,6 +12,7 @@
 [![GitHub](https://img.shields.io/badge/GitHub-Repository-black?style=flat-square&logo=github)](https://github.com/Hotakus/opencode-subagent-magazine)
 [![Stars](https://img.shields.io/github/stars/Hotakus/opencode-subagent-magazine?style=flat-square)](https://github.com/Hotakus/opencode-subagent-magazine/stargazers)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](LICENSE)
+[![English](https://img.shields.io/badge/English-README-blue?style=flat-square)](https://github.com/Hotakus/opencode-subagent-magazine/blob/master/README_EN.md)
 ![NPM Version](https://img.shields.io/npm/v/opencode-subagent-magazine?style=flat-square)
 
 </div>
