@@ -3,3 +3,4 @@ dist/
 *.tsbuildinfo
 .sisyphus/
 migrate-kv.mjs
+src/_version.ts
