@@ -237,6 +237,10 @@ function safeErrorMsg(err: unknown): string {
 // Sidebar component
 // ===================================================================
 
+// 模块级缓存：保留各 session 的最新 entryMap，不随组件内 session 切换而丢失。
+// 当用户在子 session 内部时，handleSessionEnd 可通过此缓存找到父 session 的 entries。
+const globalEntryCache = new Map<string, Map<string, SubEntry>>()
+
 function SubAgentPanel(props: {
   theme: TuiThemeCurrent
   api: TuiPluginApi
@@ -332,7 +336,32 @@ function SubAgentPanel(props: {
   ) => {
     setEntryMapRaw((prev) => {
       const next = typeof arg === "function" ? (arg as Function)(prev) : arg
-      persistEntries(props.sessionId, next)
+
+      // 检测是否有 entry 从 running 变为 done/error → 立即写 KV
+      // 避免 session 切换时 KV 仍是旧状态，导致 scan 用 Date.now() 覆盖正确的 endedAt
+      let needsImmediateFlush = false
+      for (const [id, entry] of next) {
+        const prevEntry = prev.get(id)
+        if (prevEntry?.status === "running" && (entry.status === "done" || entry.status === "error")) {
+          needsImmediateFlush = true
+          break
+        }
+      }
+
+      if (needsImmediateFlush) {
+        clearTimeout(persistTimer)
+        try {
+          const data = loadSessionData()
+          data[props.sessionId] = { ...data[props.sessionId], ts: Date.now(), entries: [...next.values()] }
+          saveSessionData(data)
+        } catch {}
+      } else {
+        persistEntries(props.sessionId, next)
+      }
+
+      // 同步到全局缓存，确保跨 session 查找时数据可用
+      globalEntryCache.set(props.sessionId, new Map(next))
+
       return next
     })
   }
@@ -560,6 +589,65 @@ function SubAgentPanel(props: {
       }
     } catch {}
 
+    // 在给定的 entries Map 中查找并更新匹配的子代理 entry。
+    // 返回 true 表示找到并更新了，false 表示未找到。
+    const tryMatchAndUpdate = (
+      entriesMap: Map<string, SubEntry>,
+      targetSid: string,
+      targetStatus: SubStatus,
+      nowTs: number,
+    ): boolean => {
+      // 精确匹配：sessionId 对得上 + 状态为 running
+      for (const [, entry] of entriesMap) {
+        if (entry.sessionId === targetSid && entry.status === "running") {
+          entry.status = targetStatus
+          entry.endedAt = nowTs
+          entry.tokens = entry.tokens ?? sessionTokens
+          entry.cost = entry.cost ?? sessionCost
+          entry.model = entry.model ?? sessionModel
+          entry.todoTotal = entry.todoTotal ?? sessionTodo?.total
+          entry.todoDone = entry.todoDone ?? sessionTodo?.done
+          entry.error = errorMsg || entry.error
+          return true
+        }
+      }
+      // 回退：sessionId 未关联但 agent 名匹配 + 状态为 running
+      if (sessionAgent) {
+        const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9-]/g, "")
+        const saNorm = normalize(sessionAgent)
+        let best: { entry: SubEntry; gap: number } | null = null
+        for (const [, entry] of entriesMap) {
+          if (entry.status !== "running") continue
+          const eaNorm = normalize(entry.agent)
+          if (!eaNorm || !saNorm) continue
+          if (!eaNorm.includes(saNorm) && !saNorm.includes(eaNorm)) continue
+          const gap = nowTs - (entry.startedAt || 0)
+          if (!best || gap > best.gap) best = { entry, gap }
+        }
+        if (!best) {
+          for (const [, entry] of entriesMap) {
+            if (entry.status !== "running") continue
+            if (entry.sessionId) continue
+            const gap = nowTs - (entry.startedAt || 0)
+            if (!best || gap > best.gap) best = { entry, gap }
+          }
+        }
+        if (best) {
+          best.entry.status = targetStatus
+          best.entry.endedAt = nowTs
+          best.entry.tokens = best.entry.tokens ?? sessionTokens
+          best.entry.cost = best.entry.cost ?? sessionCost
+          best.entry.model = best.entry.model ?? sessionModel
+          best.entry.todoTotal = best.entry.todoTotal ?? sessionTodo?.total
+          best.entry.todoDone = best.entry.todoDone ?? sessionTodo?.done
+          best.entry.sessionId = targetSid
+          best.entry.error = errorMsg || best.entry.error
+          return true
+        }
+      }
+      return false
+    }
+
     setEntryMap((prev) => {
       let changed = false
       const next = new Map(prev)
@@ -623,6 +711,47 @@ function SubAgentPanel(props: {
       }
       return changed ? next : prev
     })
+
+    // 跨 session 完成事件：用户正在查看子 session 内部时，其他子代理 done。
+    // 上面的 setEntryMap 在子 session 的 entries 中找不到父 session 的 entry。
+    // 通过全局缓存（切换前保留的父 session entries）查找并更新，再同步回 KV。
+    try {
+      const sessionObj = props.api.state.session.get(sid)
+      const parentSid = sessionObj?.parentID
+      if (parentSid && parentSid !== props.sessionId) {
+        // 优先全局缓存——切换 session 时不会被替换，始终保留父 session 的最新 entries
+        const parentCache = globalEntryCache.get(parentSid)
+        const nowTs = Date.now()
+        let found = false
+
+        if (parentCache) {
+          found = tryMatchAndUpdate(parentCache, sid, status, nowTs)
+        }
+
+        // 缓存未命中时回退到 KV（极端情况：session 切换前缓存未建立）
+        if (!found) {
+          const data = loadSessionData()
+          const rec = data[parentSid]
+          if (rec?.entries) {
+            const fallbackMap = new Map(rec.entries.map((e: SubEntry) => [e.id, e]))
+            found = tryMatchAndUpdate(fallbackMap, sid, status, nowTs)
+            if (found) {
+              // 回退命中了也要写回 KV，并回填缓存
+              data[parentSid] = { ...rec, ts: nowTs, entries: [...fallbackMap.values()] }
+              saveSessionData(data)
+              globalEntryCache.set(parentSid, fallbackMap)
+            }
+          }
+        }
+
+        // KV 同步：以全局缓存（最新的内存状态）为准写回 KV
+        if (found && parentCache) {
+          const data = loadSessionData()
+          data[parentSid] = { ...data[parentSid], ts: nowTs, entries: [...parentCache.values()] }
+          saveSessionData(data)
+        }
+      }
+    } catch {}
 
     // Delayed backfill: re-read data after state sync catches up, to capture the final
     // token/cost values that may not have been available when session.idle fired.
