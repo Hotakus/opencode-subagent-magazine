@@ -1276,7 +1276,7 @@ function SubAgentPanel(props: {
                         <text
                           onMouseOver={() => setHoveredTop(true)}
                           onMouseOut={() => setHoveredTop(false)}
-                          onMouseUp={() => setScrollOffset(0)}
+                          onMouseUp={() => { setScrollOffset(0); setHoveredTop(false) }}
                         >
                           <span style={{ fg: hoveredTop() ? pal().warning : pal().muted }}>{right}</span>
                         </text>
