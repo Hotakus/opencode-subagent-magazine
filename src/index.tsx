@@ -69,7 +69,7 @@ const I18N: Record<Lang, Record<string, string>> = {
     "cost.label": "费用",
   },
   en: {
-    "panel.title": "Sub-Agents",
+    "panel.title": "SubAgent",
     "status.none": "No sub-agents yet",
     "prompt.label": "prompt",
     "agent.label": "agent",
@@ -203,6 +203,15 @@ function desaturateTo(raw: unknown, maxSat: number, fallback: string): string {
   const ng = Math.round(c.g + (luma - c.g) * hi)
   const nb = Math.round(c.b + (luma - c.b) * hi)
   return "#" + [nr, ng, nb].map((v) => Math.max(0, Math.min(255, v)).toString(16).padStart(2, "0")).join("")
+}
+
+function dimColor(hex: string, factor = 0.5): string {
+  const c = rgb(hex)
+  if (!c) return hex
+  const r = Math.round(c.r * factor)
+  const g = Math.round(c.g * factor)
+  const b = Math.round(c.b * factor)
+  return "#" + [r, g, b].map((v) => Math.max(0, Math.min(255, v)).toString(16).padStart(2, "0")).join("")
 }
 
 const FALLBACK = {
@@ -871,11 +880,6 @@ function SubAgentPanel(props: {
     }
   })
 
-  const leftCols = createMemo(() => {
-    const icon = open() ? "\u25bc" : "\u25b6"
-    return visualWidth(icon) + 1 + visualWidth(t("panel.title"))
-  })
-
   const summaryCols = createMemo(() => {
     const p = summaryParts()
     if (!p) return 0
@@ -884,6 +888,23 @@ function SubAgentPanel(props: {
     if (p.err) w += 1 + visualWidth(p.err)
     w += p.duration ? 1 + visualWidth(p.duration) : 0
     w += p.cost ? 1 + visualWidth(p.cost) : 0
+    return w
+  })
+
+  const versionText = ` v${PLUGIN_VERSION}`
+  const versionW = visualWidth(versionText)
+
+  const showVersion = createMemo(() => {
+    if (!open()) return false
+    const icon = "\u25bc"
+    const need = visualWidth(icon) + 1 + visualWidth(t("panel.title")) + versionW + summaryCols()
+    return need <= panelWidth()
+  })
+
+  const leftCols = createMemo(() => {
+    const icon = open() ? "\u25bc" : "\u25b6"
+    let w = visualWidth(icon) + 1 + visualWidth(t("panel.title"))
+    if (showVersion()) w += versionW
     return w
   })
 
@@ -921,6 +942,7 @@ function SubAgentPanel(props: {
       >
         <span style={{ fg: pal().muted }}>{renderTick() >= 0 && open() ? "\u25bc " : "\u25b6 "}</span>
         <span style={{ fg: pal().primary }}>{t("panel.title")}</span>
+        <Show when={showVersion()}><span style={{ fg: dimColor(pal().muted, 0.75) }}>{versionText}</span></Show>
         {anyEntry() ? (
           <>
             <span style={{ fg: pal().muted }}>{" ".repeat(spacerCols())}</span>
