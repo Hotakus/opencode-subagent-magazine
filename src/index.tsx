@@ -57,11 +57,9 @@ const I18N: Record<Lang, Record<string, string>> = {
   zh: {
     "panel.title": "子代理",
     "status.none": "暂无子任务",
-    "prompt.label": "描述",
     "agent.label": "代理",
     "time.label": "耗时",
     "tokens.label": "上下文",
-    "session.label": "会话",
     "error.label": "错误",
     "model.label": "模型",
     "todo.label": "进度",
@@ -71,11 +69,9 @@ const I18N: Record<Lang, Record<string, string>> = {
   en: {
     "panel.title": "SubAgent",
     "status.none": "No sub-agents yet",
-    "prompt.label": "prompt",
     "agent.label": "agent",
     "time.label": "time",
-    "tokens.label": "context",
-    "session.label": "session",
+    "tokens.label": "tokens",
     "error.label": "error",
     "model.label": "model",
     "todo.label": "todo",
@@ -1169,13 +1165,6 @@ function SubAgentPanel(props: {
                       <span style={{ fg: pal().primary }}>{t("agent.label")}: </span>
                       <span style={{ fg: pal().muted }}>{entry.agent}</span>
                     </text>
-                    <Show when={entry.sessionId}>
-                      <text>
-                        {"  "}
-                        <span style={{ fg: pal().primary }}>{t("session.label")}: </span>
-                        <span style={{ fg: pal().muted }}>{entry.sessionId}</span>
-                      </text>
-                    </Show>
                     <Show when={elapsed() >= 2000 || entry.endedAt !== undefined}>
                       <text>
                         {"  "}
@@ -1219,57 +1208,6 @@ function SubAgentPanel(props: {
                         <span style={{ fg: pal().primary }}>{t("todo.label")}: </span>
                         <span style={{ fg: pal().muted }}>{entry.todoDone}/{entry.todoTotal}</span>
                       </text>
-                    </Show>
-                    <Show when={entry.prompt}>
-                      {(() => {
-                        const raw = entry.prompt
-                          .replace(/\n/g, " ")
-                          .replace(/\s+/g, " ")
-                          .trim()
-                        const labelW = visualWidth(t("prompt.label") + ": ")
-                        const cap1 = panelWidth() - INDENT - labelW
-                        if (visualWidth(raw) <= cap1) {
-                          return (
-                            <text>
-                              {"  "}
-                              <span style={{ fg: pal().primary }}>{t("prompt.label")}: </span>
-                              <span style={{ fg: pal().muted }}>{raw}</span>
-                            </text>
-                          )
-                        }
-                        // Line 1
-                        let c1 = 0, i1 = 0
-                        for (const ch of raw) {
-                          const w = charColumns(ch)
-                          if (c1 + w > cap1) break
-                          c1 += w
-                          i1 += ch.length
-                        }
-                        let si = i1
-                        while (si > 0 && si > i1 - 10 && raw[si - 1] !== " ") si--
-                        if (si > 0) i1 = si
-
-                        const l1 = raw.slice(0, i1).trimEnd() + "\u2026"
-                        const rest = raw.slice(i1).trimStart()
-
-                        // Line 2 — aligned under prompt value, truncated
-                        const cap2 = panelWidth() - LEFT_PAD
-                        return (
-                          <>
-                            <text>
-                              {"  "}
-                              <span style={{ fg: pal().primary }}>{t("prompt.label")}: </span>
-                              <span style={{ fg: pal().muted }}>{l1}</span>
-                            </text>
-                            <text>
-                              {"    "}
-                              <span style={{ fg: pal().muted }}>
-                                {truncate(rest, cap2)}
-                              </span>
-                            </text>
-                          </>
-                        )
-                      })()}
                     </Show>
                     <Show when={entry.sessionId}>
                       <text
