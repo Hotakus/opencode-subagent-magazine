@@ -1300,7 +1300,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
   // ── slash command: /subagent-lang ──
   api.command?.register(() => [
     {
-      title: "Sub-Agent Monitor: Language",
+      title: "SubAgent Magazine: Language",
       value: "subagent-lang",
       description: "Switch display language (中文 / English)",
       slash: { name: "subagent-lang" },
@@ -1326,7 +1326,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       },
     },
     {
-      title: "Sub-Agent Monitor: Max Entries",
+      title: "SubAgent Magazine: Max Entries",
       value: "subagent-max",
       description: "Set max visible sub-agent entries in sidebar",
       slash: { name: "subagent-max" },
@@ -1350,7 +1350,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       },
     },
     {
-      title: "Sub-Agent Monitor: Version",
+      title: "SubAgent Magazine: Version",
       value: "subagent-version",
       description: "Show plugin version",
       slash: { name: "subagent-version" },
@@ -1360,7 +1360,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       },
     },
     {
-      title: "Sub-Agent Monitor: Session",
+      title: "SubAgent Magazine: Session",
       value: "subagent-session",
       description: "Show current session ID",
       slash: { name: "subagent-session" },
