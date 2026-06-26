@@ -1,8 +1,9 @@
 <div align="center">
 <strong>
     <h1>OpenCode SubAgent Magazine</h1>
+    Load up like a magazine! Fire!<br><br>
     Real-time Sub-Agent Monitoring · TUI Sidebar Visualization<br>
-    Adaptive Theme Colors · EN/ZH Bilingual · Data Persistence
+    Adaptive Theme Colors · Low-Saturation Design Language · EN/ZH Bilingual · Data Persistence
 </strong>
 <br>
 <br>
