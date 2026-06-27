@@ -40,13 +40,15 @@
 
 - **实时状态**：运行中（呼吸动画）、已完成、错误，彩色圆点一目了然
 - **Token & 费用追踪**：每个子代理的 Token 消耗和费用汇总，标题栏全局显示
-- **展开详情**：点击展开查看 agent 类型、耗时、Token、费用、模型、进度，字段值右对齐
+- **展开详情**：点击展开查看 agent 类型、状态、耗时、Token、费用、模型、进度，字段值右对齐
 - **一键进入会话**：展开后点 `→ 进入会话` 跳转子代理的完整对话
+- **手动标记完成**：展开区右侧 `- 标记完成` 按钮可手动终结卡住的僵尸条目；`/subagent-clear-running` 批量清理
+- **状态字段显示**：展开区 `状态: 运行中/已完成/错误`，颜色与圆点一致，一目了然
 - **折叠面板**：标题栏点击折叠/展开，状态持久化，重启后保持
 - **滚动回顶**：列表底部 `↑ 回顶` 按钮一键回到顶部
 - **TTL 自动清理**：超过 3 天的旧数据自动从 KV 中清除
 - **语言适配**：支持 `/subagent-lang` 运行时切换中/英文，偏好持久化
-- **斜杠命令**：`/subagent-lang` `/subagent-max` `/subagent-session` `/subagent-version` 动态配置
+- **斜杠命令**：`/subagent-lang` `/subagent-max` `/subagent-session` `/subagent-version` `/subagent-clear-running` 动态配置
 
 ---
 
@@ -99,6 +101,7 @@ npm install -g opencode-subagent-magazine@latest
 | `/subagent-max` | 调整最大可见条目数 | 输入数字（默认 10），控制面板最多显示多少个子代理条目 |
 | `/subagent-session` | 查看当前会话 ID | 弹出当前 OpenCode 会话 ID |
 | `/subagent-version` | 查看插件版本 | 弹出当前插件版本号 |
+| `/subagent-clear-running` | 批量清理僵尸条目 | 一键将所有运行中的条目标记为完成，清理卡住的旧数据 |
 
 <div align="center">
   <img src="https://raw.githubusercontent.com/Hotakus/opencode-subagent-magazine/master/assets/slash_cmds.png" alt="斜杠命令" width="49%"></img>
@@ -114,6 +117,7 @@ npm install -g opencode-subagent-magazine@latest
 | 滚动列表 | 翻页查看更多子代理 |
 | 点击 `↑ 回顶` | 跳转到列表顶部 |
 | 点击 `→ 进入会话` | 跳转子代理完整对话 |
+| 点击 `- 标记完成` | 手动终结该条目（仅运行中时显示） |
 
 ### 4.3 状态颜色
 

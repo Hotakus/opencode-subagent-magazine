@@ -40,13 +40,15 @@ If you find this plugin useful, consider giving it a star ⭐ — thank you!<br>
 
 - **Real-time Status**: Running (breathing animation), done, error — color-coded dots at a glance
 - **Token & Cost Tracking**: Per-sub-agent token consumption and cost summary, displayed globally in the title bar
-- **Expandable Details**: Click to expand and view agent type, elapsed time, tokens, cost, model, and todo progress, with right-aligned values
+- **Expandable Details**: Click to expand and view agent type, status, elapsed time, tokens, cost, model, and todo progress, with right-aligned values
 - **One-click Session Jump**: `→ Open session` link in expanded view to navigate to the sub-agent's full conversation
+- **Manual Dismiss**: `- dismiss` button on the right side of expanded view to manually terminate stuck/zombie entries; `/subagent-clear-running` for batch cleanup
+- **Status Field**: `status: running/done/error` in expanded view, color-coded to match the status dot
 - **Collapsible Panel**: Click title bar to collapse/expand; state persists across restarts
 - **Scroll-to-Top**: `↑ Top` button at the bottom of the list for one-click return to top, with hover color change
 - **TTL Auto Cleanup**: Data older than 3 days is automatically purged from KV storage
 - **Language Support**: Runtime language switch via `/subagent-lang` (Chinese / English), preference persisted
-- **Slash Commands**: `/subagent-lang`, `/subagent-max`, `/subagent-session`, `/subagent-version` for dynamic configuration
+- **Slash Commands**: `/subagent-lang`, `/subagent-max`, `/subagent-session`, `/subagent-version`, `/subagent-clear-running` for dynamic configuration
 
 ---
 
@@ -99,6 +101,7 @@ The plugin supports dynamic configuration via slash commands or the command pale
 | `/subagent-max` | Adjust max visible entries | Enter a number (default 10) to control how many sub-agent entries are shown |
 | `/subagent-session` | View current session ID | Displays the current OpenCode session ID |
 | `/subagent-version` | View plugin version | Displays the current plugin version |
+| `/subagent-clear-running` | Batch cleanup stuck entries | Marks all running entries as done in one click, cleaning up stale data |
 
 <div align="center">
   <img src="https://raw.githubusercontent.com/Hotakus/opencode-subagent-magazine/master/assets/slash_cmds.png" alt="Slash Commands" width="49%"></img>
@@ -114,6 +117,7 @@ The plugin supports dynamic configuration via slash commands or the command pale
 | Scroll the list | Browse more sub-agents |
 | Click `↑ Top` | Jump to top of the list |
 | Click `→ Open session` | Navigate to the sub-agent's session |
+| Click `- dismiss` | Manually terminate the entry (only shown for running entries) |
 
 ### 4.3 Status Colors
 
