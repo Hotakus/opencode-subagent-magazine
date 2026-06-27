@@ -67,6 +67,7 @@ const I18N: Record<Lang, Record<string, string>> = {
     "cost.label": "费用",
     "scroll.more": "更多",
     "scroll.top": "回顶",
+    "dismiss.label": "标记完成",
   },
   en: {
     "panel.title": "SubAgent",
@@ -81,6 +82,7 @@ const I18N: Record<Lang, Record<string, string>> = {
     "cost.label": "cost",
     "scroll.more": "more",
     "scroll.top": "Top",
+    "dismiss.label": "dismiss",
   },
 }
 
@@ -374,6 +376,7 @@ function SubAgentPanel(props: {
     (() => { try { return loadSessionData()[props.sessionId]?.expanded || undefined } catch { return undefined } })()
   )
   const [hoveredOpen, setHoveredOpen] = createSignal<string | undefined>(undefined)
+  const [hoveredDismiss, setHoveredDismiss] = createSignal<string | undefined>(undefined)
   const [hoveredTop, setHoveredTop] = createSignal(false)
   const [scrollOffset, setScrollOffset] = createSignal(
     (() => { try { return loadSessionData()[props.sessionId]?.scroll ?? 0 } catch { return 0 } })()
@@ -1328,20 +1331,49 @@ function SubAgentPanel(props: {
                         <span style={{ fg: pal().muted }}>{entry.todoDone}/{entry.todoTotal}</span>
                       </text>
                     </Show>
-                    <Show when={entry.sessionId}>
-                      <text
-                        onMouseOver={() => setHoveredOpen(entry.id)}
-                        onMouseOut={() => setHoveredOpen(undefined)}
-                        onMouseUp={() => {
-                          if (entry.sessionId) {
-                            props.api.route.navigate("session", { sessionID: entry.sessionId })
-                          }
-                        }}
-                      >
-                        {"  "}
-                        <span style={{ fg: hoveredOpen() === entry.id ? pal().warning : pal().primary }}>{"\u2192 "}</span>
-                        <span style={{ fg: hoveredOpen() === entry.id ? pal().warning : pal().primary }}>{t("open.label")}</span>
-                      </text>
+                    {/* 进入会话 + 标记完成：同排左右两端，空间隔离防误触 */}
+                    <Show when={entry.sessionId || isRunning}>
+                      {(() => {
+                        const dismissLabel = () => `- ${t("dismiss.label")}`
+                        const openPrefix = () => "  \u2192 "
+                        const openFull = () => entry.sessionId ? openPrefix() + t("open.label") : ""
+                        const openW = () => entry.sessionId ? visualWidth(openFull()) : 0
+                        const spacerW = () => Math.max(1, panelWidth() - openW() - visualWidth(dismissLabel()) - 2 /* indent */)
+                        return (
+                          <box flexDirection="row">
+                            <Show when={entry.sessionId}
+                              fallback={<text>{"  "}</text>}
+                            >
+                              <text
+                                onMouseOver={() => setHoveredOpen(entry.id)}
+                                onMouseOut={() => setHoveredOpen(undefined)}
+                                onMouseUp={() => {
+                                  if (entry.sessionId) {
+                                    props.api.route.navigate("session", { sessionID: entry.sessionId })
+                                  }
+                                }}
+                              >
+                                <span style={{ fg: hoveredOpen() === entry.id ? pal().warning : pal().primary }}>{openPrefix()}</span>
+                                <span style={{ fg: hoveredOpen() === entry.id ? pal().warning : pal().primary }}>{t("open.label")}</span>
+                              </text>
+                            </Show>
+                            <Show when={isRunning}>
+                              <>
+                                <text style={{ fg: pal().muted }}>{" ".repeat(spacerW())}</text>
+                                <text
+                                  onMouseOver={() => setHoveredDismiss(entry.id)}
+                                  onMouseOut={() => setHoveredDismiss(undefined)}
+                                  onMouseUp={() => {
+                                    upsertEntry({ id: entry.id, title: entry.title, agent: entry.agent, prompt: entry.prompt, status: "done" })
+                                  }}
+                                >
+                                  <span style={{ fg: hoveredDismiss() === entry.id ? pal().warning : dimColor(pal().muted, 0.5) }}>{dismissLabel()}</span>
+                                </text>
+                              </>
+                            </Show>
+                          </box>
+                        )
+                      })()}
                     </Show>
                   </Show>
                 </>
@@ -1498,6 +1530,52 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       slash: { name: "subagent-session" },
       onSelect: (dialog) => {
         api.ui.toast({ message: `Session: ${signals.sessionId}` })
+        dialog?.clear()
+      },
+    },
+    {
+      title: "SubAgent Magazine: Clear Running",
+      value: "subagent-clear-running",
+      description: "Mark all running sub-agent entries as done (for stuck/zombie entries)",
+      slash: { name: "subagent-clear-running" },
+      onSelect: (dialog) => {
+        const entries = globalEntryCache.get(signals.sessionId)
+        if (!entries || entries.size === 0) {
+          const msg = signals.lang() === "zh" ? "暂无子代理条目" : "No sub-agent entries found"
+          api.ui.toast({ message: msg })
+          dialog?.clear()
+          return
+        }
+        let count = 0
+        for (const [, entry] of entries) {
+          if (entry.status === "running") {
+            entry.status = "done" as SubStatus
+            entry.endedAt = Date.now()
+            count++
+          }
+        }
+        if (count > 0) {
+          // 立即写 KV
+          try {
+            const data = JSON.parse(String(api.kv.get(`${KV_PREFIX}.session_data`, "{}")))
+            data[signals.sessionId] = {
+              ts: Date.now(),
+              entries: [...entries.values()],
+              scroll: data[signals.sessionId]?.scroll ?? 0,
+              expanded: data[signals.sessionId]?.expanded ?? "",
+            }
+            api.kv.set(`${KV_PREFIX}.session_data`, JSON.stringify(data))
+          } catch {}
+          const msg = signals.lang() === "zh"
+            ? `已标记 ${count} 个运行中的条目为完成`
+            : `Marked ${count} running entries as done`
+          api.ui.toast({ message: msg })
+        } else {
+          const msg = signals.lang() === "zh"
+            ? "没有需要清理的运行中条目"
+            : "No running entries to clear"
+          api.ui.toast({ message: msg })
+        }
         dialog?.clear()
       },
     },
