@@ -247,8 +247,7 @@ function safeErrorMsg(err: unknown): string {
 // Sidebar component
 // ===================================================================
 
-// 模块级缓存：保留各 session 的最新 entryMap，不随组件内 session 切换而丢失。
-// 当用户在子 session 内部时，handleSessionEnd 可通过此缓存找到父 session 的 entries。
+// 模块级缓存：各 session 的 entry 状态独立存储，不随当前视图切换而清除。
 const globalEntryCache = new Map<string, Map<string, SubEntry>>()
 
 function SubAgentPanel(props: {
@@ -347,8 +346,8 @@ function SubAgentPanel(props: {
     setEntryMapRaw((prev) => {
       const next = typeof arg === "function" ? (arg as Function)(prev) : arg
 
-      // 检测是否有 entry 从 running 变为 done/error → 立即写 KV
-      // 避免 session 切换时 KV 仍是旧状态，导致 scan 用 Date.now() 覆盖正确的 endedAt
+      // entry 状态落定（done/error）时立即持久化到 KV，跳过常规 debounce，
+      // 确保跨视图的状态一致性。
       let needsImmediateFlush = false
       for (const [id, entry] of next) {
         const prevEntry = prev.get(id)
@@ -369,7 +368,7 @@ function SubAgentPanel(props: {
         persistEntries(props.sessionId, next)
       }
 
-      // 同步到全局缓存，确保跨 session 查找时数据可用
+      // 同步到模块级缓存，供其他视图读取当前 session 的最新状态
       globalEntryCache.set(props.sessionId, new Map(next))
 
       return next
@@ -723,14 +722,13 @@ function SubAgentPanel(props: {
       return changed ? next : prev
     })
 
-    // 跨 session 完成事件：用户正在查看子 session 内部时，其他子代理 done。
-    // 上面的 setEntryMap 在子 session 的 entries 中找不到父 session 的 entry。
-    // 通过全局缓存（切换前保留的父 session entries）查找并更新，再同步回 KV。
+    // 当子代理所属的父 session 与当前视图不同时，通过模块级缓存定位
+    // 并更新父 session 的 entry 状态，随后写回 KV。
     try {
       const sessionObj = props.api.state.session.get(sid)
       const parentSid = sessionObj?.parentID
       if (parentSid && parentSid !== props.sessionId) {
-        // 优先全局缓存——切换 session 时不会被替换，始终保留父 session 的最新 entries
+        // 优先从模块级缓存获取父 session 的 entries，不受当前视图切换影响
         const parentCache = globalEntryCache.get(parentSid)
         const nowTs = Date.now()
         let found = false
@@ -739,7 +737,7 @@ function SubAgentPanel(props: {
           found = tryMatchAndUpdate(parentCache, sid, status, nowTs)
         }
 
-        // 缓存未命中时回退到 KV（极端情况：session 切换前缓存未建立）
+        // 缓存未命中时回退到 KV 读取
         if (!found) {
           const data = loadSessionData()
           const rec = data[parentSid]
@@ -747,7 +745,7 @@ function SubAgentPanel(props: {
             const fallbackMap = new Map(rec.entries.map((e: SubEntry) => [e.id, e]))
             found = tryMatchAndUpdate(fallbackMap, sid, status, nowTs)
             if (found) {
-              // 回退命中了也要写回 KV，并回填缓存
+              // 回退命中后写入 KV 并回填缓存
               data[parentSid] = { ...rec, ts: nowTs, entries: [...fallbackMap.values()] }
               saveSessionData(data)
               globalEntryCache.set(parentSid, fallbackMap)
@@ -755,7 +753,7 @@ function SubAgentPanel(props: {
           }
         }
 
-        // KV 同步：以全局缓存（最新的内存状态）为准写回 KV
+        // 将模块级缓存中的最新状态同步到 KV
         if (found && parentCache) {
           const data = loadSessionData()
           data[parentSid] = { ...data[parentSid], ts: nowTs, entries: [...parentCache.values()] }
@@ -878,7 +876,7 @@ function SubAgentPanel(props: {
         // scan uses setEntryMapRaw — ephemeral data, not persisted to kv.
         // Only event-driven changes (handlePartUpdated, handleSessionEnd) persist.
         setEntryMapRaw((prev) => {
-          // 优先全局缓存——handleSessionEnd 修复2 已同步更新，无 KV 读写延迟
+          // 优先从模块级缓存加载，KV 仅作缓存未命中时的回退
           const next = switched
             ? new Map(globalEntryCache.get(sid) ?? loadEntries(sid))
             : new Map(prev)
