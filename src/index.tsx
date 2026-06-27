@@ -58,6 +58,7 @@ const I18N: Record<Lang, Record<string, string>> = {
     "panel.title": "子代理",
     "status.none": "暂无子代理",
     "agent.label": "代理",
+    "status.label": "状态",
     "time.label": "耗时",
     "tokens.label": "上下文",
     "error.label": "错误",
@@ -68,11 +69,15 @@ const I18N: Record<Lang, Record<string, string>> = {
     "scroll.more": "更多",
     "scroll.top": "回顶",
     "dismiss.label": "标记完成",
+    "status.running": "运行中",
+    "status.done": "已完成",
+    "status.error": "错误",
   },
   en: {
     "panel.title": "SubAgent",
     "status.none": "No sub-agents yet",
     "agent.label": "agent",
+    "status.label": "status",
     "time.label": "time",
     "tokens.label": "tokens",
     "error.label": "error",
@@ -83,6 +88,9 @@ const I18N: Record<Lang, Record<string, string>> = {
     "scroll.more": "more",
     "scroll.top": "Top",
     "dismiss.label": "dismiss",
+    "status.running": "running",
+    "status.done": "done",
+    "status.error": "error",
   },
 }
 
@@ -1066,7 +1074,7 @@ function SubAgentPanel(props: {
   // ── expanded detail right-align ──
   const expandedMaxLabelW = createMemo(() => {
     const labels = [
-      t("agent.label"), t("time.label"), t("tokens.label"),
+      t("agent.label"), t("status.label"), t("time.label"), t("tokens.label"),
       t("error.label"), t("cost.label"), t("model.label"), t("todo.label"),
     ]
     return Math.max(...labels.map(l => visualWidth(l + ": ")))
@@ -1281,6 +1289,14 @@ function SubAgentPanel(props: {
                       <span style={{ fg: pal().muted }}>{" ".repeat(expandedPad(t("agent.label")))}</span>
                       <span style={{ fg: pal().muted }}>{entry.agent}</span>
                     </text>
+                    <text>
+                      {"  "}
+                      <span style={{ fg: pal().primary }}>{t("status.label")}: </span>
+                      <span style={{ fg: pal().muted }}>{" ".repeat(expandedPad(t("status.label")))}</span>
+                      <span style={{ fg: isRunning ? pal().warning : isError ? pal().error : pal().success }}>
+                        {isRunning ? t("status.running") : isError ? t("status.error") : t("status.done")}
+                      </span>
+                    </text>
                     <Show when={elapsed() >= 2000 || entry.endedAt !== undefined}>
                       <text>
                         {"  "}
@@ -1367,7 +1383,7 @@ function SubAgentPanel(props: {
                                     upsertEntry({ id: entry.id, title: entry.title, agent: entry.agent, prompt: entry.prompt, status: "done" })
                                   }}
                                 >
-                                  <span style={{ fg: hoveredDismiss() === entry.id ? pal().warning : dimColor(pal().muted, 0.5) }}>{dismissLabel()}</span>
+                                  <span style={{ fg: hoveredDismiss() === entry.id ? pal().warning : pal().muted }}>{dismissLabel()}</span>
                                 </text>
                               </>
                             </Show>
