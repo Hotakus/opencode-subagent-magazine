@@ -867,7 +867,10 @@ function SubAgentPanel(props: {
         // scan uses setEntryMapRaw — ephemeral data, not persisted to kv.
         // Only event-driven changes (handlePartUpdated, handleSessionEnd) persist.
         setEntryMapRaw((prev) => {
-          const next = switched ? loadEntries(sid) : new Map(prev)
+          // 优先全局缓存——handleSessionEnd 修复2 已同步更新，无 KV 读写延迟
+          const next = switched
+            ? new Map(globalEntryCache.get(sid) ?? loadEntries(sid))
+            : new Map(prev)
           try {
             const msgs = props.api.state.session.messages(sid)
             if (msgs && (msgs as any[]).length) {
