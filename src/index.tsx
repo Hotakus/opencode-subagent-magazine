@@ -1058,6 +1058,27 @@ function SubAgentPanel(props: {
     try { persistScroll(props.sessionId, target) } catch {}
   })
 
+  // When new entries arrive while viewing the newest end, keep the view at newest
+  let prevEntryCount = 0
+  createEffect(() => {
+    const total = entryList().length
+    if (prevEntryCount === 0) { prevEntryCount = total; return }
+    if (total === prevEntryCount) return
+
+    const m = max()
+    const wasAtNewest = props.sortOrder() === "desc"
+      ? untrack(() => scrollOffset() === 0)
+      : untrack(() => scrollOffset() >= prevEntryCount - m)
+
+    prevEntryCount = total
+
+    if (wasAtNewest) {
+      const target = props.sortOrder() === "desc" ? 0 : Math.max(0, total - m)
+      setScrollOffset(target)
+      try { persistScroll(props.sessionId, target) } catch {}
+    }
+  })
+
   const entries = createMemo(() => {
     const nowVal = now()
     return entryList().map((e) => ({
