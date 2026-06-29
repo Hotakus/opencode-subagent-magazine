@@ -45,6 +45,7 @@ interface SubEntry {
 }
 
 type Lang = "zh" | "en"
+type SortOrder = "desc" | "asc"
 
 /** OpenCode built-in tool names that spawn sub-agents or delegate tasks. */
 const SUBAGENT_TOOLS = new Set(["task", "delegate", "call_omo_agent"])
@@ -68,10 +69,13 @@ const I18N: Record<Lang, Record<string, string>> = {
     "cost.label": "费用",
     "scroll.more": "更多",
     "scroll.top": "回顶",
+    "scroll.bottom": "回底",
     "dismiss.label": "标记完成",
     "status.running": "运行中",
     "status.done": "已完成",
     "status.error": "错误",
+    "order.desc": "降序（最新在前）",
+    "order.asc": "升序（最早在前）",
   },
   en: {
     "panel.title": "SubAgent",
@@ -87,10 +91,13 @@ const I18N: Record<Lang, Record<string, string>> = {
     "cost.label": "cost",
     "scroll.more": "more",
     "scroll.top": "Top",
+    "scroll.bottom": "Bottom",
     "dismiss.label": "dismiss",
     "status.running": "running",
     "status.done": "done",
     "status.error": "error",
+    "order.desc": "Desc (newest first)",
+    "order.asc": "Asc (oldest first)",
   },
 }
 
@@ -255,6 +262,7 @@ function SubAgentPanel(props: {
   api: TuiPluginApi
   lang: () => Lang
   maxEntries: () => number
+  sortOrder: () => SortOrder
   sessionId: string
 }): JSX.Element {
   const t = (key: string) => I18N[props.lang()][key] ?? key
@@ -1020,7 +1028,11 @@ function SubAgentPanel(props: {
   // ── derived signals ──
   // Stable list — only changes when entryMap changes
   const entryList = createMemo(() => {
-    return [...entryMap().values()].sort((a, b) => b.startedAt - a.startedAt)
+    const entries = [...entryMap().values()]
+    if (props.sortOrder() === "desc") {
+      return entries.sort((a, b) => b.startedAt - a.startedAt)
+    }
+    return entries.sort((a, b) => a.startedAt - b.startedAt)
   })
 
   const max = props.maxEntries
@@ -1033,6 +1045,18 @@ function SubAgentPanel(props: {
   const visibleList = createMemo(() => entryList().slice(clampedOffset(), clampedOffset() + max()))
   const hiddenAbove = createMemo(() => clampedOffset())
   const hiddenBelow = createMemo(() => Math.max(0, entryList().length - clampedOffset() - max()))
+
+  // Reset scroll on sort order change: jump to newest in view
+  let sortInitialized = false
+  createEffect(() => {
+    props.sortOrder()
+    if (!sortInitialized) { sortInitialized = true; return }
+    const total = untrack(() => entryList().length)
+    const m = untrack(() => max())
+    const target = props.sortOrder() === "desc" ? 0 : Math.max(0, total - m)
+    setScrollOffset(target)
+    try { persistScroll(props.sessionId, target) } catch {}
+  })
 
   const entries = createMemo(() => {
     const nowVal = now()
@@ -1394,12 +1418,16 @@ function SubAgentPanel(props: {
               )
             }}
             </For>
-            <Show when={hiddenBelow() > 0 || scrollOffset() > 0}>
+            <Show when={hiddenBelow() > 0 || (props.sortOrder() === "desc" ? scrollOffset() > 0 : entryList().length > max() && clampedOffset() < entryList().length - max())}>
               {(() => {
                 const showMore = hiddenBelow() > 0
-                const showTop = scrollOffset() > 0
+                const showTop = props.sortOrder() === "desc"
+                  ? scrollOffset() > 0
+                  : entryList().length > max() && clampedOffset() < entryList().length - max()
                 const left = showMore ? `  \u2193 ${hiddenBelow()} ${t("scroll.more")}` : "  "
-                const right = `\u2191 ${t("scroll.top")}`
+                const right = props.sortOrder() === "desc"
+                  ? `\u2191 ${t("scroll.top")}`
+                  : `\u2193 ${t("scroll.bottom")}`
                 const pad = showTop ? Math.max(1, panelWidth() - visualWidth(left) - visualWidth(right)) : 0
                 return (
                   <box flexDirection="row">
@@ -1410,7 +1438,16 @@ function SubAgentPanel(props: {
                         <text
                           onMouseOver={() => setHoveredTop(true)}
                           onMouseOut={() => setHoveredTop(false)}
-                          onMouseUp={() => { setScrollOffset(0); setHoveredTop(false) }}
+                          onMouseUp={() => {
+                            const total = entryList().length
+                            const m = max()
+                            if (props.sortOrder() === "desc") {
+                              setScrollOffset(0)
+                            } else {
+                              setScrollOffset(Math.max(0, total - m))
+                            }
+                            setHoveredTop(false)
+                          }}
                         >
                           <span style={{ fg: hoveredTop() ? pal().warning : pal().muted }}>{right}</span>
                         </text>
@@ -1436,6 +1473,8 @@ interface SharedSignals {
   setLang: (l: Lang) => void
   maxEntries: () => number
   setMaxEntries: (n: number) => void
+  sortOrder: () => SortOrder
+  setSortOrder: (o: SortOrder) => void
   sessionId: string
 }
 
@@ -1451,6 +1490,7 @@ function createSidebarSlot(api: TuiPluginApi, sig: SharedSignals): TuiSlotPlugin
             api={api}
             lang={sig.lang}
             maxEntries={sig.maxEntries}
+            sortOrder={sig.sortOrder}
             sessionId={input.session_id}
           />
         )
@@ -1470,8 +1510,11 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
   const [maxEntries, setMaxEntries] = createSignal(
     parseInt(String(api.kv.get(`${KV_PREFIX}.max_entries`, "10")), 10) || 10
   )
+  const [sortOrder, setSortOrder] = createSignal<SortOrder>(
+    String(api.kv.get(`${KV_PREFIX}.order`, "desc")) === "asc" ? "asc" : "desc"
+  )
 
-  const signals: SharedSignals = { lang, setLang, maxEntries, setMaxEntries, sessionId: "" }
+  const signals: SharedSignals = { lang, setLang, maxEntries, setMaxEntries, sortOrder, setSortOrder, sessionId: "" }
 
   api.slots.register(createSidebarSlot(api, signals))
 
@@ -1496,6 +1539,33 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
               api.kv.set(`${KV_PREFIX}.lang`, l)
               api.ui.toast({
                 message: l === "zh" ? "语言: 中文" : "Language: English",
+              })
+              dialog?.clear()
+            }}
+          />
+        ))
+      },
+    },
+    {
+      title: "SubAgent Magazine: Sort Order",
+      value: "subagent-order",
+      description: "Set sub-agent entry sort order (desc / asc)",
+      slash: { name: "subagent-order" },
+      onSelect: (dialog) => {
+        const t = (k: string) => I18N[lang()][k] ?? k
+        dialog?.replace(() => (
+          <api.ui.DialogSelect
+            title="Sort Order / 排序方式"
+            options={[
+              { title: t("order.desc"), value: "desc" },
+              { title: t("order.asc"), value: "asc" },
+            ]}
+            onSelect={(opt) => {
+              const o = opt.value as SortOrder
+              setSortOrder(o)
+              api.kv.set(`${KV_PREFIX}.order`, o)
+              api.ui.toast({
+                message: o === "desc" ? t("order.desc") : t("order.asc"),
               })
               dialog?.clear()
             }}
