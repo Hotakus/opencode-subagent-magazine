@@ -46,6 +46,7 @@ interface SubEntry {
 
 type Lang = "zh" | "en"
 type SortOrder = "desc" | "asc"
+type ScrollMode = "wheel" | "click"
 
 /** OpenCode built-in tool names that spawn sub-agents or delegate tasks. */
 const SUBAGENT_TOOLS = new Set(["task", "delegate", "call_omo_agent"])
@@ -76,6 +77,8 @@ const I18N: Record<Lang, Record<string, string>> = {
     "status.error": "错误",
     "order.desc": "降序（最新在前）",
     "order.asc": "升序（最早在前）",
+    "scroll.wheel": "滚轮翻页",
+    "scroll.click": "点击翻页",
   },
   en: {
     "panel.title": "SubAgent",
@@ -98,6 +101,8 @@ const I18N: Record<Lang, Record<string, string>> = {
     "status.error": "error",
     "order.desc": "Desc (newest first)",
     "order.asc": "Asc (oldest first)",
+    "scroll.wheel": "Wheel Scroll",
+    "scroll.click": "Click Scroll",
   },
 }
 
@@ -263,6 +268,7 @@ function SubAgentPanel(props: {
   lang: () => Lang
   maxEntries: () => number
   sortOrder: () => SortOrder
+  scrollMode: () => ScrollMode
   sessionId: string
 }): JSX.Element {
   const t = (key: string) => I18N[props.lang()][key] ?? key
@@ -393,6 +399,8 @@ function SubAgentPanel(props: {
   const [hoveredOpen, setHoveredOpen] = createSignal<string | undefined>(undefined)
   const [hoveredDismiss, setHoveredDismiss] = createSignal<string | undefined>(undefined)
   const [hoveredTop, setHoveredTop] = createSignal(false)
+  const [hoveredMoreAbove, setHoveredMoreAbove] = createSignal(false)
+  const [hoveredMoreBelow, setHoveredMoreBelow] = createSignal(false)
   const [scrollOffset, setScrollOffset] = createSignal(
     (() => { try { return loadSessionData()[props.sessionId]?.scroll ?? 0 } catch { return 0 } })()
   )
@@ -1046,6 +1054,11 @@ function SubAgentPanel(props: {
   const hiddenAbove = createMemo(() => clampedOffset())
   const hiddenBelow = createMemo(() => Math.max(0, entryList().length - clampedOffset() - max()))
 
+  // Drop hover state when ↑ more disappears (hiddenAbove hits zero)
+  createEffect(() => {
+    if (hiddenAbove() === 0) setHoveredMoreAbove(false)
+  })
+
   // Reset scroll on sort order change: jump to newest in view
   let sortInitialized = false
   createEffect(() => {
@@ -1217,6 +1230,7 @@ function SubAgentPanel(props: {
         >
           <box
             onMouseScroll={(e) => {
+              if (props.scrollMode() === "click") return
               const total = entryList().length
               const m = max()
               if (total <= m) return
@@ -1229,8 +1243,28 @@ function SubAgentPanel(props: {
             }}
           >
             <Show when={hiddenAbove() > 0}>
-              <text style={{ fg: pal().muted }}>
-                {"  "}&uarr; {hiddenAbove()} {t("scroll.more")}
+              <text
+                onMouseOver={() => setHoveredMoreAbove(true)}
+                onMouseOut={() => setHoveredMoreAbove(false)}
+                onMouseUp={() => {
+                  const total = entryList().length
+                  const m = max()
+                  if (total <= m) return
+                  const next = Math.max(0, scrollOffset() - m)
+                  if (next === 0) {
+                    setTimeout(() => {
+                      setScrollOffset(next)
+                      try { persistScroll(props.sessionId, next) } catch {}
+                    }, 0)
+                  } else {
+                    setScrollOffset(next)
+                    try { persistScroll(props.sessionId, next) } catch {}
+                  }
+                }}
+              >
+                <span style={{ fg: hoveredMoreAbove() ? pal().warning : pal().muted }}>
+                  {"  "}&uarr; {hiddenAbove()} {t("scroll.more")}
+                </span>
               </text>
             </Show>
             <For each={visibleList()}>
@@ -1431,7 +1465,23 @@ function SubAgentPanel(props: {
                 const pad = showTop ? Math.max(1, panelWidth() - visualWidth(left) - visualWidth(right)) : 0
                 return (
                   <box flexDirection="row">
-                    <text style={{ fg: pal().muted }}>{left}</text>
+                    <text
+                      onMouseOver={() => showMore && setHoveredMoreBelow(true)}
+                      onMouseOut={() => setHoveredMoreBelow(false)}
+                      onMouseUp={() => {
+                        if (!showMore) return
+                        const total = entryList().length
+                        const m = max()
+                        if (total <= m) return
+                        setScrollOffset((prev) => Math.min(total - m, prev + m))
+                        try { persistScroll(props.sessionId, scrollOffset()) } catch {}
+                        setHoveredMoreBelow(false)
+                      }}
+                    >
+                      <span style={{ fg: showMore && hoveredMoreBelow() ? pal().warning : pal().muted }}>
+                        {left}
+                      </span>
+                    </text>
                     {showTop ? (
                       <>
                         <text style={{ fg: pal().muted }}>{" ".repeat(pad)}</text>
@@ -1475,6 +1525,8 @@ interface SharedSignals {
   setMaxEntries: (n: number) => void
   sortOrder: () => SortOrder
   setSortOrder: (o: SortOrder) => void
+  scrollMode: () => ScrollMode
+  setScrollMode: (m: ScrollMode) => void
   sessionId: string
 }
 
@@ -1491,6 +1543,7 @@ function createSidebarSlot(api: TuiPluginApi, sig: SharedSignals): TuiSlotPlugin
             lang={sig.lang}
             maxEntries={sig.maxEntries}
             sortOrder={sig.sortOrder}
+            scrollMode={sig.scrollMode}
             sessionId={input.session_id}
           />
         )
@@ -1513,8 +1566,11 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
   const [sortOrder, setSortOrder] = createSignal<SortOrder>(
     String(api.kv.get(`${KV_PREFIX}.order`, "desc")) === "asc" ? "asc" : "desc"
   )
+  const [scrollMode, setScrollMode] = createSignal<ScrollMode>(
+    String(api.kv.get(`${KV_PREFIX}.scroll_mode`, "wheel")) === "click" ? "click" : "wheel"
+  )
 
-  const signals: SharedSignals = { lang, setLang, maxEntries, setMaxEntries, sortOrder, setSortOrder, sessionId: "" }
+  const signals: SharedSignals = { lang, setLang, maxEntries, setMaxEntries, sortOrder, setSortOrder, scrollMode, setScrollMode, sessionId: "" }
 
   api.slots.register(createSidebarSlot(api, signals))
 
@@ -1566,6 +1622,33 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
               api.kv.set(`${KV_PREFIX}.order`, o)
               api.ui.toast({
                 message: o === "desc" ? t("order.desc") : t("order.asc"),
+              })
+              dialog?.clear()
+            }}
+          />
+        ))
+      },
+    },
+    {
+      title: "SubAgent Magazine: Scroll Mode",
+      value: "subagent-scroll",
+      description: "Set scroll mode (wheel / click)",
+      slash: { name: "subagent-scroll" },
+      onSelect: (dialog) => {
+        const t = (k: string) => I18N[lang()][k] ?? k
+        dialog?.replace(() => (
+          <api.ui.DialogSelect
+            title="Scroll Mode / 滚动模式"
+            options={[
+              { title: t("scroll.wheel"), value: "wheel" },
+              { title: t("scroll.click"), value: "click" },
+            ]}
+            onSelect={(opt) => {
+              const m = opt.value as ScrollMode
+              setScrollMode(m)
+              api.kv.set(`${KV_PREFIX}.scroll_mode`, m)
+              api.ui.toast({
+                message: m === "wheel" ? t("scroll.wheel") : t("scroll.click"),
               })
               dialog?.clear()
             }}
