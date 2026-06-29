@@ -3,12 +3,11 @@
   "version": "1.2.0",
   "description": "OpenCode TUI plugin monitoring sub-agent invocation status in real time",
   "type": "module",
-  "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
-    ".": {
-      "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+    "./server": {
+      "import": "./dist/server.js",
+      "types": "./dist/server.d.ts"
     },
     "./tui": {
       "import": "./dist/tui.js",
