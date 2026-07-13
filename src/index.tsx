@@ -66,6 +66,8 @@ const I18N: Record<Lang, Record<string, string>> = {
     "error.label": "错误",
     "model.label": "模型",
     "todo.label": "进度",
+    "session.label": "会话 ID",
+    "session.toast.copy": "可手动复制上方 ID",
     "open.label": "进入会话",
     "cost.label": "费用",
     "scroll.more": "更多",
@@ -90,6 +92,8 @@ const I18N: Record<Lang, Record<string, string>> = {
     "error.label": "error",
     "model.label": "model",
     "todo.label": "todo",
+    "session.label": "session ID",
+    "session.toast.copy": "Copy the ID above manually",
     "open.label": "Open session",
     "cost.label": "cost",
     "scroll.more": "more",
@@ -1135,7 +1139,7 @@ function SubAgentPanel(props: {
   const expandedMaxLabelW = createMemo(() => {
     const labels = [
       t("agent.label"), t("status.label"), t("time.label"), t("tokens.label"),
-      t("error.label"), t("cost.label"), t("model.label"), t("todo.label"),
+      t("error.label"), t("cost.label"), t("model.label"), t("todo.label"), t("session.label"),
     ]
     return Math.max(...labels.map(l => visualWidth(l + ": ")))
   })
@@ -1426,6 +1430,25 @@ function SubAgentPanel(props: {
                         <span style={{ fg: pal().primary }}>{t("todo.label")}: </span>
                         <span style={{ fg: pal().muted }}>{" ".repeat(expandedPad(t("todo.label")))}</span>
                         <span style={{ fg: pal().muted }}>{entry.todoDone}/{entry.todoTotal}</span>
+                      </text>
+                    </Show>
+                    <Show when={entry.sessionId}>
+                      <text
+                        onMouseUp={() => {
+                          if (entry.sessionId) {
+                            props.api.ui.toast({
+                              title: entry.title || entry.agent,
+                              message: `${entry.sessionId}\n\n${t("session.toast.copy")}`,
+                              duration: 8000,
+                            })
+                          }
+                        }}
+                      >
+                        {"  "}
+                        <span style={{ fg: pal().primary }}>{t("session.label")}: </span>
+                        <span style={{ fg: pal().muted }}>{" ".repeat(expandedPad(t("session.label")))}</span>
+                        <span style={{ fg: pal().muted }}>{truncate(entry.sessionId!, expandedValAvail() - visualWidth(" ⎘"))}</span>
+                        <span style={{ fg: pal().warning }}> ⎘</span>
                       </text>
                     </Show>
                     {/* 进入会话 + 标记完成：同排左右两端，空间隔离防误触 */}
