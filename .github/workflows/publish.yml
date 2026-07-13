@@ -24,6 +24,8 @@ jobs:
 
       - run: npm install -g npm@latest
 
+      - run: npm config set allow-remote true
+
       - run: npm ci
 
       - run: npm run version
