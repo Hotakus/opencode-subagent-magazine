@@ -982,13 +982,16 @@ function SubAgentPanel(props: {
   // On session change: load from kv (entries survive component unmount), then scan+merge.
   // On same session: only scan+merge (keep event‑driven running entries).
   let lastSid = props.sessionId
+  let lastTick = 0
   createEffect(() => {
     const sid = props.sessionId
     const switched = sid !== lastSid
     lastSid = sid
+    const tick = clearTick()    // 外部触发清除时 +1，effect 重跑
+    const forceReload = tick !== lastTick && !switched
+    lastTick = tick
     const t = setTimeout(() => {
       untrack(() => {
-        void clearTick() // 外部触发的清除事件 → 重扫
         if (switched) {
           const { parentSid, isChild } = resolveParent(sid)
           const data = loadSessionData()
@@ -1006,7 +1009,7 @@ function SubAgentPanel(props: {
         // Only event-driven changes (handlePartUpdated, handleSessionEnd) persist.
         setEntryMapRaw((prev) => {
           // 优先从模块级缓存加载，KV 仅作缓存未命中时的回退
-          const next = switched
+          const next = (switched || forceReload)
             ? new Map(globalEntryCache.get(sid) ?? loadEntries(sid))
             : new Map(prev)
           // 从 KV 加载当前会话的清除名单，扫描时跳过被手动清除的历史条目
