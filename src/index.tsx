@@ -81,6 +81,16 @@ const I18N: Record<Lang, Record<string, string>> = {
     "order.asc": "升序（最早在前）",
     "scroll.wheel": "滚轮翻页",
     "scroll.click": "点击翻页",
+    "ttl.label": "清理周期",
+    "ttl.3d": "3 天",
+    "ttl.7d": "7 天",
+    "ttl.14d": "14 天",
+    "ttl.30d": "30 天",
+    "ttl.toast": "清理周期已设为 {n} 天",
+    "clear.title": "确认清除",
+    "clear.prompt": "确定清除当前会话所有子代理记录？此操作不可撤销。",
+    "clear.done": "已清除 {n} 条子代理记录",
+    "clear.empty": "当前会话无子代理记录",
   },
   en: {
     "panel.title": "SubAgent",
@@ -107,6 +117,16 @@ const I18N: Record<Lang, Record<string, string>> = {
     "order.asc": "Asc (oldest first)",
     "scroll.wheel": "Wheel Scroll",
     "scroll.click": "Click Scroll",
+    "ttl.label": "TTL",
+    "ttl.3d": "3 days",
+    "ttl.7d": "7 days",
+    "ttl.14d": "14 days",
+    "ttl.30d": "30 days",
+    "ttl.toast": "TTL set to {n} days",
+    "clear.title": "Confirm",
+    "clear.prompt": "Clear all sub-agent records for this session? This cannot be undone.",
+    "clear.done": "Cleared {n} sub-agent record(s)",
+    "clear.empty": "No sub-agent records in this session",
   },
 }
 
@@ -279,7 +299,8 @@ function SubAgentPanel(props: {
 
   // ── session data (single-key, true deletion on cleanup) ──
   const SESSION_DATA_KEY = `${KV_PREFIX}.session_data`
-  const TTL_MS = 3 * 24 * 60 * 60 * 1000
+  const ttlDays = parseInt(String(props.api.kv.get(`${KV_PREFIX}.ttl_days`, "3")), 10) || 3
+  const TTL_MS = ttlDays * 24 * 60 * 60 * 1000
 
   interface ChildRecord {
     scroll: number
@@ -1879,6 +1900,76 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
           api.ui.toast({ message: msg })
         }
         dialog?.clear()
+      },
+    },
+    {
+      title: "SubAgent Magazine: TTL",
+      value: "subagent-ttl",
+      description: "Set session data retention period (days before auto-cleanup)",
+      slash: { name: "subagent-ttl" },
+      onSelect: (dialog) => {
+        const t = (k: string) => I18N[signals.lang()][k] ?? k
+        dialog?.replace(() => (
+          <api.ui.DialogSelect
+            title={t("ttl.label")}
+            options={[
+              { title: t("ttl.3d"), value: "3" },
+              { title: t("ttl.7d"), value: "7" },
+              { title: t("ttl.14d"), value: "14" },
+              { title: t("ttl.30d"), value: "30" },
+            ]}
+            onSelect={(opt) => {
+              const days = parseInt(opt.value, 10)
+              api.kv.set(`${KV_PREFIX}.ttl_days`, String(days))
+              const msg = t("ttl.toast").replace("{n}", String(days))
+              api.ui.toast({ message: msg })
+              dialog?.clear()
+            }}
+          />
+        ))
+      },
+    },
+    {
+      title: "SubAgent Magazine: Clear Entries",
+      value: "subagent-clear-entries",
+      description: "Delete all sub-agent records for the current session (cannot be undone)",
+      slash: { name: "subagent-clear-entries" },
+      onSelect: (dialog) => {
+        const t = (k: string) => I18N[signals.lang()][k] ?? k
+        const sid = signals.sessionId
+        const sessionObj = api.state.session.get(sid)
+        const parentID = (sessionObj as any)?.parentID as string | undefined
+        dialog?.replace(() => (
+          <api.ui.DialogConfirm
+            title={t("clear.title")}
+            message={t("clear.prompt")}
+            onConfirm={() => {
+              try {
+                const data = JSON.parse(String(api.kv.get(`${KV_PREFIX}.session_data`, "{}")))
+                let count = 0
+                if (parentID) {
+                  if (data[parentID]?.children?.[sid]) {
+                    count = data[parentID].children[sid].entries?.length ?? 0
+                    data[parentID].children[sid].entries = []
+                    data[parentID].children[sid].scroll = 0
+                    data[parentID].children[sid].expanded = ""
+                  }
+                } else {
+                  count = data[sid]?.entries?.length ?? 0
+                  if (data[sid]) {
+                    data[sid].entries = []
+                    data[sid].scroll = 0
+                    data[sid].expanded = ""
+                  }
+                }
+                api.kv.set(`${KV_PREFIX}.session_data`, JSON.stringify(data))
+                const msg = t("clear.done").replace("{n}", String(count))
+                api.ui.toast({ message: msg })
+              } catch {}
+              dialog?.clear()
+            }}
+          />
+        ))
       },
     },
   ])
