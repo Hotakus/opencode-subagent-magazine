@@ -281,11 +281,18 @@ function SubAgentPanel(props: {
   const SESSION_DATA_KEY = `${KV_PREFIX}.session_data`
   const TTL_MS = 3 * 24 * 60 * 60 * 1000
 
+  interface ChildRecord {
+    scroll: number
+    expanded: string
+    entries: SubEntry[]
+  }
+
   interface SessionRecord {
     ts: number
     entries: SubEntry[]
     scroll: number
     expanded: string
+    children: Record<string, ChildRecord>
   }
 
   const loadSessionData = (): Record<string, SessionRecord> => {
@@ -299,12 +306,27 @@ function SubAgentPanel(props: {
     try { props.api.kv.set(SESSION_DATA_KEY, JSON.stringify(data)) } catch {}
   }
 
+  /** 将任意 session ID 解析为父会话 ID + 是否子会话。
+   *  通过 SDK session.get(sid).parentID 判断，无 parentID 即为主会话。 */
+  const resolveParent = (sid: string): { parentSid: string; isChild: boolean } => {
+    try {
+      const session = props.api.state.session.get(sid)
+      const parentID = (session as any)?.parentID as string | undefined
+      if (parentID) return { parentSid: parentID, isChild: true }
+    } catch {}
+    return { parentSid: sid, isChild: false }
+  }
+
   const loadEntries = (sid: string): Map<string, SubEntry> => {
     const m = new Map<string, SubEntry>()
     try {
-      const rec = loadSessionData()[sid]
-      if (rec?.entries) {
-        for (const e of rec.entries) m.set(e.id, e)
+      const { parentSid, isChild } = resolveParent(sid)
+      const rec = loadSessionData()[parentSid]
+      if (rec) {
+        const source = isChild ? rec.children?.[sid]?.entries : rec.entries
+        if (source) {
+          for (const e of source) m.set(e.id, e)
+        }
       }
     } catch {}
     return m
@@ -316,7 +338,15 @@ function SubAgentPanel(props: {
     persistTimer = setTimeout(() => {
       try {
         const data = loadSessionData()
-        data[sid] = { ...data[sid], ts: Date.now(), entries: [...entries.values()] }
+        const { parentSid, isChild } = resolveParent(sid)
+        if (isChild) {
+          if (!data[parentSid]) data[parentSid] = { ts: Date.now(), entries: [], scroll: 0, expanded: "", children: {} }
+          if (!data[parentSid].children) data[parentSid].children = {}
+          if (!data[parentSid].children[sid]) data[parentSid].children[sid] = { scroll: 0, expanded: "", entries: [] }
+          data[parentSid].children[sid] = { ...data[parentSid].children[sid], entries: [...entries.values()] }
+        } else {
+          data[sid] = { ...data[sid], ts: Date.now(), entries: [...entries.values()], children: data[sid]?.children ?? {} }
+        }
         saveSessionData(data)
       } catch {}
     }, 200)
@@ -325,7 +355,15 @@ function SubAgentPanel(props: {
   const persistScroll = (sid: string, scroll: number) => {
     try {
       const data = loadSessionData()
-      data[sid] = { ...data[sid], ts: Date.now(), scroll }
+      const { parentSid, isChild } = resolveParent(sid)
+      if (isChild) {
+        if (!data[parentSid]) data[parentSid] = { ts: Date.now(), entries: [], scroll: 0, expanded: "", children: {} }
+        if (!data[parentSid].children) data[parentSid].children = {}
+        if (!data[parentSid].children[sid]) data[parentSid].children[sid] = { scroll: 0, expanded: "", entries: [] }
+        data[parentSid].children[sid] = { ...data[parentSid].children[sid], scroll }
+      } else {
+        data[sid] = { ...data[sid], ts: Date.now(), scroll, children: data[sid]?.children ?? {} }
+      }
       saveSessionData(data)
     } catch {}
   }
@@ -333,7 +371,15 @@ function SubAgentPanel(props: {
   const persistExpanded = (sid: string, expanded: string) => {
     try {
       const data = loadSessionData()
-      data[sid] = { ...data[sid], ts: Date.now(), expanded }
+      const { parentSid, isChild } = resolveParent(sid)
+      if (isChild) {
+        if (!data[parentSid]) data[parentSid] = { ts: Date.now(), entries: [], scroll: 0, expanded: "", children: {} }
+        if (!data[parentSid].children) data[parentSid].children = {}
+        if (!data[parentSid].children[sid]) data[parentSid].children[sid] = { scroll: 0, expanded: "", entries: [] }
+        data[parentSid].children[sid] = { ...data[parentSid].children[sid], expanded }
+      } else {
+        data[sid] = { ...data[sid], ts: Date.now(), expanded, children: data[sid]?.children ?? {} }
+      }
       saveSessionData(data)
     } catch {}
   }
@@ -379,7 +425,15 @@ function SubAgentPanel(props: {
         clearTimeout(persistTimer)
         try {
           const data = loadSessionData()
-          data[props.sessionId] = { ...data[props.sessionId], ts: Date.now(), entries: [...next.values()] }
+          const { parentSid, isChild } = resolveParent(props.sessionId)
+          if (isChild) {
+            if (!data[parentSid]) data[parentSid] = { ts: Date.now(), entries: [], scroll: 0, expanded: "", children: {} }
+            if (!data[parentSid].children) data[parentSid].children = {}
+            if (!data[parentSid].children[props.sessionId]) data[parentSid].children[props.sessionId] = { scroll: 0, expanded: "", entries: [] }
+            data[parentSid].children[props.sessionId] = { ...data[parentSid].children[props.sessionId], entries: [...next.values()] }
+          } else {
+            data[props.sessionId] = { ...data[props.sessionId], ts: Date.now(), entries: [...next.values()], children: data[props.sessionId]?.children ?? {} }
+          }
           saveSessionData(data)
         } catch {}
       } else {
@@ -398,7 +452,14 @@ function SubAgentPanel(props: {
     (() => { try { return props.api.kv.get(`${KV_PREFIX}.open`, true) as boolean } catch { return true } })()
   )
   const [expanded, setExpanded] = createSignal<string | undefined>(
-    (() => { try { return loadSessionData()[props.sessionId]?.expanded || undefined } catch { return undefined } })()
+    (() => {
+      try {
+        const { parentSid, isChild } = resolveParent(props.sessionId)
+        const rec = loadSessionData()[parentSid]
+        if (rec) return isChild ? rec.children?.[props.sessionId]?.expanded || undefined : rec.expanded || undefined
+      } catch {}
+      return undefined
+    })(),
   )
   const [hoveredOpen, setHoveredOpen] = createSignal<string | undefined>(undefined)
   const [hoveredDismiss, setHoveredDismiss] = createSignal<string | undefined>(undefined)
@@ -406,7 +467,13 @@ function SubAgentPanel(props: {
   const [hoveredMoreAbove, setHoveredMoreAbove] = createSignal(false)
   const [hoveredMoreBelow, setHoveredMoreBelow] = createSignal(false)
   const [scrollOffset, setScrollOffset] = createSignal(
-    (() => { try { return loadSessionData()[props.sessionId]?.scroll ?? 0 } catch { return 0 } })()
+    (() => {
+      try {
+        const { parentSid, isChild } = resolveParent(props.sessionId)
+        const rec = loadSessionData()[parentSid]
+        return isChild ? rec?.children?.[props.sessionId]?.scroll ?? 0 : rec?.scroll ?? 0
+      } catch { return 0 }
+    })(),
   )
   const [now, setNow] = createSignal(Date.now())
   const [renderTick, setRenderTick] = createSignal(0)
@@ -890,8 +957,17 @@ function SubAgentPanel(props: {
     const t = setTimeout(() => {
       untrack(() => {
         if (switched) {
-          const saved = loadSessionData()[sid]?.scroll ?? 0
+          const { parentSid, isChild } = resolveParent(sid)
+          const data = loadSessionData()
+          const saved = isChild
+            ? data[parentSid]?.children?.[sid]?.scroll ?? 0
+            : data[sid]?.scroll ?? 0
           setScrollOffset(saved)
+          // 刷新父会话的访问时间 TTL，防止活跃会话的数据过期
+          if (!isChild && data[sid]?.entries?.length) {
+            data[sid].ts = Date.now()
+            saveSessionData(data)
+          }
         }
         // scan uses setEntryMapRaw — ephemeral data, not persisted to kv.
         // Only event-driven changes (handlePartUpdated, handleSessionEnd) persist.
@@ -1754,7 +1830,8 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       description: "Mark all running sub-agent entries as done (for stuck/zombie entries)",
       slash: { name: "subagent-clear-running" },
       onSelect: (dialog) => {
-        const entries = globalEntryCache.get(signals.sessionId)
+        const sid = signals.sessionId
+        const entries = globalEntryCache.get(sid)
         if (!entries || entries.size === 0) {
           const msg = signals.lang() === "zh" ? "暂无子代理条目" : "No sub-agent entries found"
           api.ui.toast({ message: msg })
@@ -1773,11 +1850,21 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
           // 立即写 KV
           try {
             const data = JSON.parse(String(api.kv.get(`${KV_PREFIX}.session_data`, "{}")))
-            data[signals.sessionId] = {
-              ts: Date.now(),
-              entries: [...entries.values()],
-              scroll: data[signals.sessionId]?.scroll ?? 0,
-              expanded: data[signals.sessionId]?.expanded ?? "",
+            const sessionObj = api.state.session.get(sid)
+            const parentID = (sessionObj as any)?.parentID as string | undefined
+            if (parentID) {
+              if (!data[parentID]) data[parentID] = { ts: Date.now(), entries: [], scroll: 0, expanded: "", children: {} }
+              if (!data[parentID].children) data[parentID].children = {}
+              if (!data[parentID].children[sid]) data[parentID].children[sid] = { scroll: 0, expanded: "", entries: [] }
+              data[parentID].children[sid] = { ...data[parentID].children[sid], entries: [...entries.values()] }
+            } else {
+              data[sid] = {
+                ts: Date.now(),
+                entries: [...entries.values()],
+                scroll: data[sid]?.scroll ?? 0,
+                expanded: data[sid]?.expanded ?? "",
+                children: data[sid]?.children ?? {},
+              }
             }
             api.kv.set(`${KV_PREFIX}.session_data`, JSON.stringify(data))
           } catch {}
