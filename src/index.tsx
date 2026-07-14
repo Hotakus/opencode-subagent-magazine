@@ -119,7 +119,7 @@ const I18N: Record<Lang, Record<string, string>> = {
     "order.asc": "Asc (oldest first)",
     "scroll.wheel": "Wheel Scroll",
     "scroll.click": "Click Scroll",
-    "ttl.label": "TTL",
+    "ttl.label": "TTL (Time to Live)",
     "ttl.3d": "3 days",
     "ttl.7d": "7 days",
     "ttl.14d": "14 days",
