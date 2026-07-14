@@ -1928,9 +1928,12 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       slash: { name: "subagent-ttl" },
       onSelect: (dialog) => {
         const t = (k: string) => I18N[signals.lang()][k] ?? k
+        const curRaw = parseInt(String(api.kv.get(`${KV_PREFIX}.ttl_days`, "3")), 10)
+        const curDays = Number.isNaN(curRaw) ? 3 : curRaw
+        const curLabel = curDays === 0 ? t("ttl.unlimited") : `${curDays}d`
         dialog?.replace(() => (
           <api.ui.DialogSelect
-            title={t("ttl.label")}
+            title={`${t("ttl.label")}  (${curLabel})`}
             options={[
               { title: t("ttl.3d"), value: "3" },
               { title: t("ttl.7d"), value: "7" },
