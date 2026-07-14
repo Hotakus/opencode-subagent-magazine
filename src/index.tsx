@@ -309,7 +309,7 @@ function SubAgentPanel(props: {
     scroll: number
     expanded: string
     entries: SubEntry[]
-    cleared?: boolean
+    clearedIds?: string[]
   }
 
   interface SessionRecord {
@@ -318,7 +318,7 @@ function SubAgentPanel(props: {
     scroll: number
     expanded: string
     children: Record<string, ChildRecord>
-    cleared?: boolean
+    clearedIds?: string[]
   }
 
   const loadSessionData = (): Record<string, SessionRecord> => {
@@ -369,9 +369,9 @@ function SubAgentPanel(props: {
           if (!data[parentSid]) data[parentSid] = { ts: Date.now(), entries: [], scroll: 0, expanded: "", children: {} }
           if (!data[parentSid].children) data[parentSid].children = {}
           if (!data[parentSid].children[sid]) data[parentSid].children[sid] = { scroll: 0, expanded: "", entries: [] }
-          data[parentSid].children[sid] = { ...data[parentSid].children[sid], entries: [...entries.values()], cleared: false }
+          data[parentSid].children[sid] = { ...data[parentSid].children[sid], entries: [...entries.values()] }
         } else {
-          data[sid] = { ...data[sid], ts: Date.now(), entries: [...entries.values()], children: data[sid]?.children ?? {}, cleared: false }
+          data[sid] = { ...data[sid], ts: Date.now(), entries: [...entries.values()], children: data[sid]?.children ?? {} }
         }
         saveSessionData(data)
       } catch {}
@@ -456,9 +456,9 @@ function SubAgentPanel(props: {
             if (!data[parentSid]) data[parentSid] = { ts: Date.now(), entries: [], scroll: 0, expanded: "", children: {} }
             if (!data[parentSid].children) data[parentSid].children = {}
             if (!data[parentSid].children[props.sessionId]) data[parentSid].children[props.sessionId] = { scroll: 0, expanded: "", entries: [] }
-            data[parentSid].children[props.sessionId] = { ...data[parentSid].children[props.sessionId], entries: [...next.values()], cleared: false }
+            data[parentSid].children[props.sessionId] = { ...data[parentSid].children[props.sessionId], entries: [...next.values()] }
           } else {
-            data[props.sessionId] = { ...data[props.sessionId], ts: Date.now(), entries: [...next.values()], children: data[props.sessionId]?.children ?? {}, cleared: false }
+            data[props.sessionId] = { ...data[props.sessionId], ts: Date.now(), entries: [...next.values()], children: data[props.sessionId]?.children ?? {} }
           }
           saveSessionData(data)
         } catch {}
@@ -1003,11 +1003,10 @@ function SubAgentPanel(props: {
           const next = switched
             ? new Map(globalEntryCache.get(sid) ?? loadEntries(sid))
             : new Map(prev)
-          // 被手动清除的会话跳过消息扫描重建，仅保留事件驱动新增的条目
-          const { parentSid, isChild } = resolveParent(sid)
-          const parentRec = loadSessionData()[parentSid]
-          const activeRec = isChild ? parentRec?.children?.[sid] : parentRec
-          if (activeRec?.cleared) return next
+          // 从 KV 加载当前会话的清除名单，扫描时跳过被手动清除的历史条目
+          const { parentSid: scanPSid, isChild: scanChild } = resolveParent(sid)
+          const scanRec = loadSessionData()[scanPSid]
+          const clearedIds = new Set(scanChild ? scanRec?.children?.[sid]?.clearedIds : scanRec?.clearedIds)
           try {
             const msgs = props.api.state.session.messages(sid)
             if (msgs && (msgs as any[]).length) {
@@ -1027,6 +1026,9 @@ function SubAgentPanel(props: {
                     const st = (part as any).state as Record<string, unknown> | undefined
                     const rawStatus = String(st?.status ?? "")
                     const exists = next.get(id)
+
+                    // 已手动清除的条目：scan 发现但不在内存 → 跳过重建
+                    if (!exists && clearedIds.has(id)) continue
 
                     // Only create entries for tool calls that entered execution.
                     // "pending" / empty: skip new entries; allow heuristics for existing ones below.
@@ -1960,19 +1962,22 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                 let count = 0
                 if (parentID) {
                   if (data[parentID]?.children?.[sid]) {
-                    count = data[parentID].children[sid].entries?.length ?? 0
-                    data[parentID].children[sid].entries = []
-                    data[parentID].children[sid].scroll = 0
-                    data[parentID].children[sid].expanded = ""
-                    data[parentID].children[sid].cleared = true
+                    const child = data[parentID].children[sid]
+                    const ids = child.entries?.map((e: any) => e.id) ?? []
+                    count = ids.length
+                    child.entries = []
+                    child.scroll = 0
+                    child.expanded = ""
+                    child.clearedIds = [...new Set([...(child.clearedIds ?? []), ...ids])]
                   }
                 } else {
                   count = data[sid]?.entries?.length ?? 0
                   if (data[sid]) {
+                    const ids = data[sid].entries?.map((e: any) => e.id) ?? []
                     data[sid].entries = []
                     data[sid].scroll = 0
                     data[sid].expanded = ""
-                    data[sid].cleared = true
+                    data[sid].clearedIds = [...new Set([...(data[sid].clearedIds ?? []), ...ids])]
                   }
                 }
                 api.kv.set(`${KV_PREFIX}.session_data`, JSON.stringify(data))
