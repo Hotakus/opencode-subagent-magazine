@@ -53,9 +53,10 @@ Interested in token cache visualization? Check out [opencode-visual-cache](https
 - **Scroll to Newest**: `↑ Top` / `↓ Bottom` button jumps to the newest entries; direction adapts to sort order
 - **Configurable Sort Order**: `/subagent-order` supports descending (newest first) and ascending (oldest first) ordering
 - **Scroll Mode Toggle**: `/subagent-scroll` switches between wheel scroll and click-to-scroll (click `↑ more` / `↓ more` to page), resolving sidebar/global scroll conflicts
-- **TTL Auto Cleanup**: Data older than 3 days is automatically purged from KV storage
+- **TTL Auto Cleanup**: Configurable retention period (3/7/14/30 days or Never), auto-refreshed on access, expired data purged automatically
+- **Manual Entry Clear**: `/subagent-clear-entries` removes all records for the current session and prevents scan re-creation of historical entries
 - **Language Support**: Runtime language switch via `/subagent-lang` (Chinese / English), preference persisted
-- **Slash Commands**: `/subagent-lang`, `/subagent-max`, `/subagent-order`, `/subagent-scroll`, `/subagent-session`, `/subagent-version`, `/subagent-clear-running` for dynamic configuration
+- **Slash Commands**: `/subagent-lang`, `/subagent-max`, `/subagent-order`, `/subagent-scroll`, `/subagent-ttl`, `/subagent-clear-entries`, `/subagent-session`, `/subagent-version`, `/subagent-clear-running` for dynamic configuration
 
 ---
 
@@ -108,6 +109,8 @@ The plugin supports dynamic configuration via slash commands or the command pale
 | `/subagent-max` | Adjust max visible entries | Enter a number (default 10) to control how many sub-agent entries are shown |
 | `/subagent-order` | Switch sort order | Choose descending (newest first) or ascending (oldest first); list re-sorts and jumps to newest |
 | `/subagent-scroll` | Switch scroll mode | Choose wheel scroll or click-to-scroll (click `↑ more` / `↓ more` to page) |
+| `/subagent-ttl` | Set data retention period | Choose 3 / 7 / 14 / 30 days or Never to control KV auto-cleanup interval |
+| `/subagent-clear-entries` | Clear current session records | Confirms then deletes all sub-agent records, preventing scan re-creation of historical entries |
 | `/subagent-session` | View current session ID | Displays the current OpenCode session ID |
 | `/subagent-version` | View plugin version | Displays the current plugin version |
 | `/subagent-clear-running` | Batch cleanup stuck entries | Marks all running entries as done in one click, cleaning up stale data |

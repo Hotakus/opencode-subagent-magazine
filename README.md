@@ -53,9 +53,10 @@
 - **滚动回顶/回底**：列表底部 `↑ 回顶` / `↓ 回底` 按钮一键跳转到最新条目位置，方向随排序自适应
 - **可配置排序**：`/subagent-order` 支持「降序（最新在前）」和「升序（最早在前）」两种排列方式
 - **翻页模式切换**：`/subagent-scroll` 可选「滚轮翻页」或「点击 more 翻页」，解决侧边栏与全局滚动冲突
-- **TTL 自动清理**：超过 3 天的旧数据自动从 KV 中清除
+- **TTL 自动清理**：可配置数据保留期限（3/7/14/30 天/无期限），每次访问自动续期，过期自动清除
+- **手动清除条目**：`/subagent-clear-entries` 清除当前会话所有记录，防止历史条目扫描重建
 - **语言适配**：支持 `/subagent-lang` 运行时切换中/英文，偏好持久化
-- **斜杠命令**：`/subagent-lang` `/subagent-max` `/subagent-order` `/subagent-scroll` `/subagent-session` `/subagent-version` `/subagent-clear-running` 动态配置
+- **斜杠命令**：`/subagent-lang` `/subagent-max` `/subagent-order` `/subagent-scroll` `/subagent-ttl` `/subagent-clear-entries` `/subagent-session` `/subagent-version` `/subagent-clear-running` 动态配置
 
 ---
 
@@ -108,6 +109,8 @@ npm install -g opencode-subagent-magazine@latest
 | `/subagent-max` | 调整最大可见条目数 | 输入数字（默认 10），控制面板最多显示多少个子代理条目 |
 | `/subagent-order` | 切换排序方式 | 选择「降序（最新在前）」或「升序（最早在前）」，即时重排并跳转到最新条目 |
 | `/subagent-scroll` | 切换翻页模式 | 选择「滚轮翻页」或「点击 more 翻页」，解决与全局滚动冲突 |
+| `/subagent-ttl` | 设置数据保留期限 | 选择 3 天 / 7 天 / 14 天 / 30 天 / 无期限，控制 KV 自动清理间隔 |
+| `/subagent-clear-entries` | 清除当前会话记录 | 确认后删除所有子代理记录，阻止扫描重建历史条目 |
 | `/subagent-session` | 查看当前会话 ID | 弹出当前 OpenCode 会话 ID |
 | `/subagent-version` | 查看插件版本 | 弹出当前插件版本号 |
 | `/subagent-clear-running` | 批量清理僵尸条目 | 一键将所有运行中的条目标记为完成，清理卡住的旧数据 |
