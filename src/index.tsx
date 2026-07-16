@@ -665,7 +665,7 @@ function SubAgentPanel(props: {
       // Background tasks: tool completion ≠ agent completion — keep running until session.idle
       // Only keep running if state metadata confirms a child session was spawned;
       // otherwise (failed spawn, invalid agent) mark as done so the entry isn't stuck forever.
-      if (input?.run_in_background === true && status === "done") {
+      if ((input?.run_in_background === true || input?.background === true) && status === "done") {
         const stMetaCheck = st?.metadata as Record<string, unknown> | undefined
         const hasChild = stMetaCheck?.session_id !== undefined || stMetaCheck?.sessionId !== undefined
         if (hasChild) status = "running"
@@ -1057,7 +1057,7 @@ function SubAgentPanel(props: {
                     if (rawStatus === "completed") status = "done"
                     // Background tasks: tool completion ≠ agent completion — keep running until session.idle
                     // Only keep running if state metadata confirms a child session was spawned.
-                    if ((st?.input as Record<string, unknown> | undefined)?.run_in_background === true && status === "done") {
+                    if (((st?.input as Record<string, unknown> | undefined)?.run_in_background === true || (st?.input as Record<string, unknown> | undefined)?.background === true) && status === "done") {
                       const scanStMeta = st?.metadata as Record<string, unknown> | undefined
                       const scanHasChild = scanStMeta?.session_id !== undefined || scanStMeta?.sessionId !== undefined
                       if (scanHasChild) status = "running"
