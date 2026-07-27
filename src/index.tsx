@@ -1530,12 +1530,17 @@ function SubAgentPanel(props: {
                       </text>
                     </Show>
                     <Show when={entry.cost !== undefined}>
-                      <text>
-                        {"  "}
-                        <span style={{ fg: pal().primary }}>{t("cost.label")}: </span>
-                        <span style={{ fg: pal().muted }}>{" ".repeat(expandedPad(t("cost.label")))}</span>
-                        <span style={{ fg: pal().muted }}>${entry.cost!.toFixed(4)}</span>
-                      </text>
+                      {(() => {
+                        const cost = entry.cost!
+                        return (
+                          <text>
+                            {"  "}
+                            <span style={{ fg: pal().primary }}>{t("cost.label")}: </span>
+                            <span style={{ fg: pal().muted }}>{" ".repeat(expandedPad(t("cost.label")))}</span>
+                            <span style={{ fg: pal().muted }}>${cost.toFixed(4)}</span>
+                          </text>
+                        )
+                      })()}
                     </Show>
                     <Show when={entry.model}>
                       <text>
