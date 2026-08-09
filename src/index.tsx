@@ -1720,8 +1720,8 @@ function SubAgentPanel(props: {
                         const openPrefix = () => "  \u2192 "
                         const openFull = () => entry.sessionId ? openPrefix() + t("open.label") : ""
                         const openW = () => entry.sessionId ? visualWidth(openFull()) : 0
-                        const cancelLabel = () => `  ${t("cancel.label")}`
-                        const dismissLabel = () => `- ${t("dismiss.label")}`
+                        const cancelLabel = () => ` ${t("cancel.label")}`
+                        const dismissLabel = () => ` ${t("dismiss.label")}`
                         const rightW = (isRunning ? visualWidth(dismissLabel()) : 0) + (isRunning && entry.sessionId ? visualWidth(cancelLabel()) : 0)
                         const spacerW = () => Math.max(1, panelWidth() - openW() - rightW - 2)
                         return (
@@ -1747,7 +1747,7 @@ function SubAgentPanel(props: {
                                 onMouseOut={() => setHoveredCancel(undefined)}
                                 onMouseUp={() => cancelEntry(entry)}
                               >
-                                <span style={{ fg: hoveredCancel() === entry.id ? pal().error : pal().error }}>{cancelLabel()}</span>
+                                <span style={{ fg: hoveredCancel() === entry.id ? pal().warning : pal().error }}>{cancelLabel()}</span>
                               </text>
                             </Show>
                             <Show when={isRunning}>
