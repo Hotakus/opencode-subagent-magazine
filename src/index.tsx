@@ -20,6 +20,7 @@ import {
   For,
 } from "solid-js"
 import { PLUGIN_VERSION } from "./_version"
+import { copyText } from "./clipboard"
 
 // ===================================================================
 // Types
@@ -71,6 +72,8 @@ const I18N: Record<Lang, Record<string, string>> = {
     "todo.label": "进度",
     "session.label": "会话 ID",
     "session.toast.copy": "可手动复制上方 ID",
+    "session.toast.copied": "会话 ID 已复制",
+    "session.toast.copy_failed": "无法访问系统剪贴板，请手动复制上方 ID",
     "open.label": "进入会话",
     "cost.label": "费用",
     "scroll.more": "更多",
@@ -120,6 +123,8 @@ const I18N: Record<Lang, Record<string, string>> = {
     "todo.label": "todo",
     "session.label": "session ID",
     "session.toast.copy": "Copy the ID above manually",
+    "session.toast.copied": "Session ID copied",
+    "session.toast.copy_failed": "Cannot access the system clipboard; copy the ID above manually",
     "open.label": "Open session",
     "cost.label": "cost",
     "scroll.more": "more",
@@ -1697,14 +1702,28 @@ function SubAgentPanel(props: {
                     </Show>
                     <Show when={entry.sessionId}>
                       <text
-                        onMouseUp={() => {
-                          if (entry.sessionId) {
+                        onMouseUp={async () => {
+                          const sessionId = entry.sessionId
+                          if (!sessionId) return
+
+                          const result = await copyText(sessionId)
+
+                          if (result.copied) {
                             props.api.ui.toast({
+                              variant: "success",
                               title: entry.title || entry.agent,
-                              message: `${entry.sessionId}\n\n${t("session.toast.copy")}`,
-                              duration: 8000,
+                              message: t("session.toast.copied"),
+                              duration: 2500,
                             })
+                            return
                           }
+
+                          props.api.ui.toast({
+                            variant: "warning",
+                            title: entry.title || entry.agent,
+                            message: `${sessionId}\n\n${t("session.toast.copy_failed")}`,
+                            duration: 8000,
+                          })
                         }}
                       >
                         {"  "}
