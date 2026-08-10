@@ -21,6 +21,7 @@ import {
 } from "solid-js"
 import { PLUGIN_VERSION } from "./_version"
 import { copyText } from "./clipboard"
+import { LangCode, LANG_META, createT, detectLang } from "./i18n"
 
 // ===================================================================
 // Types
@@ -48,129 +49,12 @@ interface SubEntry {
   cancelReason?: "manual"
 }
 
-type Lang = "zh" | "en"
+type Lang = LangCode
 type SortOrder = "desc" | "asc"
 type ScrollMode = "wheel" | "click"
 
 /** OpenCode built-in tool names that spawn sub-agents or delegate tasks. */
 const SUBAGENT_TOOLS = new Set(["task", "delegate", "call_omo_agent"])
-
-// ===================================================================
-// i18n
-// ===================================================================
-
-const I18N: Record<Lang, Record<string, string>> = {
-  zh: {
-    "panel.title": "子代理",
-    "status.none": "暂无子代理",
-    "agent.label": "代理",
-    "status.label": "状态",
-    "time.label": "耗时",
-    "tokens.label": "上下文",
-    "error.label": "错误",
-    "model.label": "模型",
-    "todo.label": "进度",
-    "session.label": "会话 ID",
-    "session.toast.copy": "可手动复制上方 ID",
-    "session.toast.copied": "会话 ID 已复制",
-    "session.toast.copy_failed": "无法访问系统剪贴板，请手动复制上方 ID",
-    "open.label": "进入会话",
-    "cost.label": "费用",
-    "scroll.more": "更多",
-    "scroll.top": "回顶",
-    "scroll.bottom": "回底",
-    "dismiss.label": "标记完成",
-    "cancel.label": "取消",
-    "status.running": "运行中",
-    "status.done": "已完成",
-    "status.cancelled": "已取消",
-    "status.error": "错误",
-    "order.desc": "降序（最新在前）",
-    "order.asc": "升序（最早在前）",
-    "scroll.wheel": "滚轮翻页",
-    "scroll.click": "点击翻页",
-    "ttl.label": "清理周期",
-    "ttl.3d": "3 天",
-    "ttl.7d": "7 天",
-    "ttl.14d": "14 天",
-    "ttl.30d": "30 天",
-    "ttl.unlimited": "无期限",
-    "ttl.toast": "清理周期已设为 {n} 天",
-    "ttl.toast_unlimited": "清理周期已设为无期限",
-    "clear.title": "确认清除",
-    "clear.prompt": "确定清除当前会话所有子代理记录？此操作不可撤销。",
-    "clear.prompt_running": "当前有 {n} 个运行中的子代理，清除后将不可恢复。确定继续？",
-    "clear.done": "已清除 {n} 条子代理记录",
-    "clear.empty": "当前会话无子代理记录",
-    "cancel.no_session": "子会话 ID 不可用",
-    "cancel.not_child": "目标不是子会话",
-    "cancel.read_error": "无法读取会话信息",
-    "cancel.outside_tree": "目标不在当前监控会话树中",
-    "cancel.already_ended": "会话已结束，无需取消",
-    "cancel.status_error": "无法查询会话状态",
-    "cancel.sent": "已发送取消指令",
-    "cancel.failed": "取消失败",
-  },
-  en: {
-    "panel.title": "SubAgent",
-    "status.none": "No sub-agents yet",
-    "agent.label": "agent",
-    "status.label": "status",
-    "time.label": "time",
-    "tokens.label": "tokens",
-    "error.label": "error",
-    "model.label": "model",
-    "todo.label": "todo",
-    "session.label": "session ID",
-    "session.toast.copy": "Copy the ID above manually",
-    "session.toast.copied": "Session ID copied",
-    "session.toast.copy_failed": "Cannot access the system clipboard; copy the ID above manually",
-    "open.label": "Open session",
-    "cost.label": "cost",
-    "scroll.more": "more",
-    "scroll.top": "Top",
-    "scroll.bottom": "Bottom",
-    "dismiss.label": "dismiss",
-    "cancel.label": "Cancel",
-    "status.running": "running",
-    "status.done": "done",
-    "status.cancelled": "cancelled",
-    "status.error": "error",
-    "order.desc": "Desc (newest first)",
-    "order.asc": "Asc (oldest first)",
-    "scroll.wheel": "Wheel Scroll",
-    "scroll.click": "Click Scroll",
-    "ttl.label": "TTL (Time to Live)",
-    "ttl.3d": "3 days",
-    "ttl.7d": "7 days",
-    "ttl.14d": "14 days",
-    "ttl.30d": "30 days",
-    "ttl.unlimited": "Never",
-    "ttl.toast": "TTL set to {n} days",
-    "ttl.toast_unlimited": "TTL set to Never",
-    "clear.title": "Confirm",
-    "clear.prompt": "Clear all sub-agent records for this session? This cannot be undone.",
-    "clear.prompt_running": "{n} sub-agent(s) are still running. Clearing will discard them permanently. Continue?",
-    "clear.done": "Cleared {n} sub-agent record(s)",
-    "clear.empty": "No sub-agent records in this session",
-    "cancel.no_session": "Child session ID is unavailable",
-    "cancel.not_child": "Target is not a child session",
-    "cancel.read_error": "Cannot read session info",
-    "cancel.outside_tree": "Target is outside the monitored session tree",
-    "cancel.already_ended": "Session already ended, no need to cancel",
-    "cancel.status_error": "Cannot query session status",
-    "cancel.sent": "Cancel instruction sent",
-    "cancel.failed": "Cancellation failed",
-  },
-}
-
-declare const process: { env: Record<string, string | undefined> } | undefined
-
-function detectLang(): Lang {
-  const env = process?.env?.OPENCODE_LANG ?? process?.env?.LANG ?? ""
-  if (env.startsWith("zh")) return "zh"
-  return "en"
-}
 
 // ===================================================================
 // Helpers — visual width
@@ -332,7 +216,7 @@ function SubAgentPanel(props: {
   scrollMode: () => ScrollMode
   sessionId: string
 }): JSX.Element {
-  const t = (key: string) => I18N[props.lang()][key] ?? key
+  const t = createT(() => props.lang())
 
   // ── session data (single-key, true deletion on cleanup) ──
   const SESSION_DATA_KEY = `${KV_PREFIX}.session_data`
@@ -667,7 +551,7 @@ function SubAgentPanel(props: {
     if (!childId) {
       props.api.ui.toast({
         title: entry.title || entry.agent,
-        message: t("cancel.label") + ": " + (I18N[props.lang()]["cancel.no_session"] ?? "Child session ID is unavailable"),
+                message: t("cancel.label") + ": " + t("cancel.no_session"),
       })
       return
     }
@@ -677,14 +561,14 @@ function SubAgentPanel(props: {
       if (!child?.parentID) {
         props.api.ui.toast({
           title: entry.title || entry.agent,
-          message: t("cancel.label") + ": " + (I18N[props.lang()]["cancel.not_child"] ?? "Target is not a child session"),
+                message: t("cancel.label") + ": " + t("cancel.not_child"),
         })
         return
       }
     } catch {
       props.api.ui.toast({
         title: entry.title || entry.agent,
-        message: t("cancel.label") + ": " + (I18N[props.lang()]["cancel.read_error"] ?? "Cannot read session info"),
+                message: t("cancel.label") + ": " + t("cancel.read_error"),
       })
       return
     }
@@ -692,7 +576,7 @@ function SubAgentPanel(props: {
     if (!isDescendantOf(childId, props.sessionId)) {
       props.api.ui.toast({
         title: entry.title || entry.agent,
-        message: t("cancel.label") + ": " + (I18N[props.lang()]["cancel.outside_tree"] ?? "Target is outside the monitored session tree"),
+                message: t("cancel.label") + ": " + t("cancel.outside_tree"),
       })
       return
     }
@@ -712,7 +596,7 @@ function SubAgentPanel(props: {
     } catch {
       props.api.ui.toast({
         title: entry.title || entry.agent,
-        message: t("cancel.label") + ": " + (I18N[props.lang()]["cancel.status_error"] ?? "Cannot query session status"),
+                message: t("cancel.label") + ": " + t("cancel.status_error"),
       })
       return
     }
@@ -730,7 +614,7 @@ function SubAgentPanel(props: {
         status: "cancel_requested", sessionId: entry.sessionId,
         abortAccepted: true,
       } as any)
-      props.api.ui.toast({ message: t("cancel.label") + ": " + (I18N[props.lang()]["cancel.sent"] ?? "Cancel instruction sent") })
+      props.api.ui.toast({ message: t("cancel.label") + ": " + t("cancel.sent") })
     } catch (err) {
       upsertEntry({
         id: entry.id, title: entry.title, agent: entry.agent, prompt: entry.prompt,
@@ -739,7 +623,7 @@ function SubAgentPanel(props: {
       })
       props.api.ui.toast({
         title: entry.title || entry.agent,
-        message: t("cancel.label") + ": " + (I18N[props.lang()]["cancel.failed"] ?? "Cancellation failed"),
+                message: t("cancel.label") + ": " + t("cancel.failed"),
       })
     }
   }
@@ -1895,7 +1779,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
   // ── language ──
   const stored = String(api.kv.get(`${KV_PREFIX}.lang`, ""))
   const initialLang: Lang =
-    stored === "zh" || stored === "en" ? stored : detectLang()
+    LANG_META.some((m) => m.code === stored) ? (stored as Lang) : detectLang()
   const [lang, setLang] = createSignal<Lang>(initialLang)
   const [maxEntries, setMaxEntries] = createSignal(
     parseInt(String(api.kv.get(`${KV_PREFIX}.max_entries`, "10")), 10) || 10
@@ -1922,16 +1806,13 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
         dialog?.replace(() => (
           <api.ui.DialogSelect
             title="Language / 语言"
-            options={[
-              { title: "中文", value: "zh" },
-              { title: "English", value: "en" },
-            ]}
+            options={LANG_META.map((m) => ({ title: m.label, value: m.code }))}
             onSelect={(opt) => {
               const l = opt.value as Lang
               setLang(l)
               api.kv.set(`${KV_PREFIX}.lang`, l)
               api.ui.toast({
-                message: l === "zh" ? "语言: 中文" : "Language: English",
+                message: "Language: " + (LANG_META.find((m) => m.code === l)?.label ?? l),
               })
               dialog?.clear()
             }}
@@ -1945,7 +1826,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       description: "Set sub-agent entry sort order (desc / asc)",
       slash: { name: "subagent-order" },
       onSelect: (dialog) => {
-        const t = (k: string) => I18N[lang()][k] ?? k
+        const t = createT(() => lang())
         dialog?.replace(() => (
           <api.ui.DialogSelect
             title="Sort Order / 排序方式"
@@ -1972,7 +1853,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       description: "Set scroll mode (wheel / click)",
       slash: { name: "subagent-scroll" },
       onSelect: (dialog) => {
-        const t = (k: string) => I18N[lang()][k] ?? k
+        const t = createT(() => lang())
         dialog?.replace(() => (
           <api.ui.DialogSelect
             title="Scroll Mode / 滚动模式"
@@ -2100,7 +1981,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       description: "Set session data retention period (days before auto-cleanup)",
       slash: { name: "subagent-ttl" },
       onSelect: (dialog) => {
-        const t = (k: string) => I18N[signals.lang()][k] ?? k
+        const t = createT(() => signals.lang())
         const curRaw = parseInt(String(api.kv.get(`${KV_PREFIX}.ttl_days`, "3")), 10)
         const curDays = Number.isNaN(curRaw) ? 3 : curRaw
         const curLabel = curDays === 0 ? t("ttl.unlimited") : `${curDays}d`
@@ -2117,7 +1998,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             onSelect={(opt) => {
               const days = parseInt(opt.value, 10)
               api.kv.set(`${KV_PREFIX}.ttl_days`, String(days))
-              const msg = days === 0 ? t("ttl.toast_unlimited") : t("ttl.toast").replace("{n}", String(days))
+              const msg = days === 0 ? t("ttl.toast_unlimited") : t("ttl.toast", { n: days })
               api.ui.toast({ message: msg })
               dialog?.clear()
             }}
@@ -2131,7 +2012,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       description: "Delete all sub-agent records for the current session (cannot be undone)",
       slash: { name: "subagent-clear-entries" },
       onSelect: (dialog) => {
-        const t = (k: string) => I18N[signals.lang()][k] ?? k
+        const t = createT(() => signals.lang())
         const sid = signals.sessionId
         const sessionObj = api.state.session.get(sid)
         const parentID = (sessionObj as any)?.parentID as string | undefined
@@ -2142,7 +2023,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
           for (const [, e] of cached) { if (e.status === "running") runningCount++ }
         }
         const msg = runningCount > 0
-          ? t("clear.prompt_running").replace("{n}", String(runningCount))
+          ? t("clear.prompt_running", { n: runningCount })
           : t("clear.prompt")
         dialog?.replace(() => (
           <api.ui.DialogConfirm
@@ -2175,7 +2056,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                 api.kv.set(`${KV_PREFIX}.session_data`, JSON.stringify(data))
                 globalEntryCache.delete(sid)
                 setClearTick((v) => v + 1)
-                const msg = t("clear.done").replace("{n}", String(count))
+                const msg = t("clear.done", { n: count })
                 api.ui.toast({ message: msg })
               } catch {}
               dialog?.clear()
