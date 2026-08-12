@@ -428,8 +428,9 @@ function SubAgentPanel(props: {
   let boxEl: any
   let disposed = false
 
-  /** Total context tokens for a sub-agent session.
-   *  Matches opencode-visual-cache's "总计": last assistant message's input + cache.read. */
+  /** Total usage tokens for a sub-agent session.
+   *  Matches opencode's bottom status bar usage: last assistant message with
+   *  output > 0, summing input + output + reasoning + cache read/write. */
   const readSessionTokens = (sid: string): number | undefined => {
     if (!sid) return undefined
     try {
@@ -439,9 +440,13 @@ function SubAgentPanel(props: {
           const m = (msgs as any[])[i]
           if (m.role !== "assistant") continue
           const t = m.tokens
-          if (!t) continue
-          const cache = t.cache as { read?: number; write?: number } | undefined
-          const ctx = (Number(t.input) || 0) + (cache?.read ?? 0)
+          if (!t || !(Number(t.output) > 0)) continue
+          const ctx =
+            (Number(t.input) || 0) +
+            (Number(t.output) || 0) +
+            (Number(t.reasoning) || 0) +
+            (Number(t.cache?.read) || 0) +
+            (Number(t.cache?.write) || 0)
           if (ctx > 0) return ctx
         }
       }
