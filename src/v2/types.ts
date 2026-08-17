@@ -112,6 +112,13 @@ export interface KeymapCommand {
   readonly run: (input?: string) => void | false | Promise<void>
 }
 
+/** 最小 client 面（运行时由 V2 提供——取消走 session.interrupt）。 */
+export interface ClientLike {
+  readonly session: {
+    interrupt(input: { sessionID: string; continue?: boolean }): Promise<unknown>
+  }
+}
+
 export interface Context {
   readonly app: App
   readonly options: Record<string, any>
@@ -119,6 +126,7 @@ export interface Context {
   readonly renderer: { readonly terminalWidth: number }
   readonly theme: Theme
   readonly data: Data
+  readonly client: ClientLike
   readonly storage: Storage
   readonly ui: {
     slot(claim: SlotClaim): () => void

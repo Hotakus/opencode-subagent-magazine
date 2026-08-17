@@ -123,6 +123,10 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
     if (type === "session.tool.success" || type === "session.tool.failed") {
       const meta = normalizeMeta(data.metadata)
       if (meta.sessionID === undefined) return undefined
+      // 取消导致的工具失败：metadata.status 是工具被打断时的状态（"running"）——不是真错误。
+      // 忽略——最终状态由 execution.interrupted → settleOnIdle 裁定 cancelled
+      // （否则 handlePartUpdated 的 error 分支会把 cancel_requested 覆盖成 error）
+      if (type === "session.tool.failed" && meta.status === "running") return undefined
       const name = data.name ?? info?.name
       if (name && !isSubagentTool(name)) return undefined
       const input = info?.input ?? data.input ?? {}
@@ -220,9 +224,8 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
       status: (sid) => {
         try {
           const st = context.data.session.status(sid)
-          // V2 的 status 值（running/idle…）→ V1 语义（busy/idle…）：
-          // V1 cancelEntry 检查 `st.type !== "busy"`（busy=运行中→走取消流程）；
-          // V2 的 "running" 等价 V1 的 "busy"——不映射会跳过取消直接标记 done。
+          // V2 的 "running" 等价 V1 的 "busy"（cancelEntry 检查 `st.type !== "busy"`——
+          // 不映射会跳过取消流程直接标记 done）
           const type = st === "running" ? "busy" : st ?? ""
           return { type }
         } catch { return undefined }
@@ -260,11 +263,18 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
             }
             return () => { for (const u of unsubs) u() }
           }
-          case "session.idle":
-            return context.data.on("session.execution.succeeded", (e) => {
-              const sid = String(((e as Record<string, any>).data as Record<string, any> | undefined)?.sessionID ?? "")
-              if (sid) cb({ type, payload: { sessionID: sid } })
-            })
+          case "session.idle": {
+            // V1 的 session.idle = 会话结束（含取消后的 idle——settleOnIdle 裁定 cancelled）
+            // V2：execution.succeeded（正常完成）+ execution.interrupted（被中断——取消）都映射到这里
+            const unsubs: Array<() => void> = []
+            for (const evt of ["session.execution.succeeded", "session.execution.interrupted"]) {
+              unsubs.push(context.data.on(evt, (e) => {
+                const sid = String(((e as Record<string, any>).data as Record<string, any> | undefined)?.sessionID ?? "")
+                if (sid) cb({ type, payload: { sessionID: sid } })
+              }))
+            }
+            return () => { for (const u of unsubs) u() }
+          }
           case "session.error":
             return context.data.on("session.execution.failed", (e) => {
               const evt = (e as Record<string, any>).data as Record<string, any> | undefined
@@ -277,7 +287,8 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
       },
     },
     client: {
-      abort: ({ sessionID }) => context.data.session.interrupt(sessionID),
+      // V2 官方取消途径：context.client.session.interrupt（data.session 无 interrupt）
+      abort: ({ sessionID }) => context.client.session.interrupt({ sessionID }).then(() => {}),
     },
     route: {
       navigateSession: (sessionID) => context.ui.router.navigate({ type: "session", sessionID }),
