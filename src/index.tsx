@@ -7,8 +7,8 @@ import type {
   TuiSlotContext,
   TuiSlotPlugin,
   TuiPluginModule,
-  TuiThemeCurrent,
 } from "@opencode-ai/plugin/tui"
+import type { PanelApi, PanelEvent } from "./panel/panel-api"
 import {
   createMemo,
   createSignal,
@@ -208,8 +208,8 @@ const globalEntryCache = new Map<string, Map<string, SubEntry>>()
 const [clearTick, setClearTick] = createSignal(0)
 
 function SubAgentPanel(props: {
-  theme: TuiThemeCurrent
-  api: TuiPluginApi
+  api: PanelApi
+  theme: Record<string, unknown>
   lang: () => Lang
   maxEntries: () => number
   sortOrder: () => SortOrder
@@ -255,7 +255,7 @@ function SubAgentPanel(props: {
    *  通过 SDK session.get(sid).parentID 判断，无 parentID 即为主会话。 */
   const resolveParent = (sid: string): { parentSid: string; isChild: boolean } => {
     try {
-      const session = props.api.state.session.get(sid)
+      const session = props.api.session.get(sid)
       const parentID = (session as any)?.parentID as string | undefined
       if (parentID) return { parentSid: parentID, isChild: true }
     } catch {}
@@ -428,89 +428,6 @@ function SubAgentPanel(props: {
   let boxEl: any
   let disposed = false
 
-  /** Total usage tokens for a sub-agent session.
-   *  Matches opencode's bottom status bar usage: last assistant message with
-   *  output > 0, summing input + output + reasoning + cache read/write. */
-  const readSessionTokens = (sid: string): number | undefined => {
-    if (!sid) return undefined
-    try {
-      const msgs = props.api.state.session.messages(sid)
-      if (msgs) {
-        for (let i = (msgs as any[]).length - 1; i >= 0; i--) {
-          const m = (msgs as any[])[i]
-          if (m.role !== "assistant") continue
-          const t = m.tokens
-          if (!t || !(Number(t.output) > 0)) continue
-          const ctx =
-            (Number(t.input) || 0) +
-            (Number(t.output) || 0) +
-            (Number(t.reasoning) || 0) +
-            (Number(t.cache?.read) || 0) +
-            (Number(t.cache?.write) || 0)
-          if (ctx > 0) return ctx
-        }
-      }
-      return undefined
-    } catch {
-      return undefined
-    }
-  }
-
-  /** Sum USD cost from a session's messages.
-   *  Prefers the database-level aggregate (`session.cost`) which is not affected
-   *  by the sync layer's `limit: 100` message window.  Falls back to message
-   *  traversal when the aggregate is unavailable (older SDK versions). */
-  const readSessionCost = (sid: string): number | undefined => {
-    if (!sid) return undefined
-    try {
-      const session = props.api.state.session.get(sid)
-      if (session?.cost != null && session.cost > 0) return session.cost
-      const msgs = props.api.state.session.messages(sid)
-      if (!msgs) return undefined
-      let total = 0
-      for (const m of msgs as any[]) {
-        if (m.role === "assistant" && typeof m.cost === "number") total += m.cost
-      }
-      return total > 0 ? total : undefined
-    } catch {
-      return undefined
-    }
-  }
-
-  /** Last assistant message's modelID for a sub-agent session. */
-  const readSessionModel = (sid: string): string | undefined => {
-    if (!sid) return undefined
-    try {
-      const msgs = props.api.state.session.messages(sid)
-      if (msgs) {
-        for (let i = (msgs as any[]).length - 1; i >= 0; i--) {
-          const m = (msgs as any[])[i]
-          if (m.role === "assistant" && m.modelID) return String(m.modelID)
-        }
-      }
-      return undefined
-    } catch {
-      return undefined
-    }
-  }
-
-  /** Todo completion stats for a sub-agent session.
-   *  `done` counts completed + cancelled items. */
-  const readSessionTodo = (sid: string): { total: number; done: number } | undefined => {
-    if (!sid) return undefined
-    try {
-      const todos = props.api.state.session.todo(sid)
-      if (!todos || todos.length === 0) return undefined
-      let done = 0
-      for (const t of todos) {
-        if (t.status === "completed" || t.status === "cancelled") done++
-      }
-      return { total: todos.length, done }
-    } catch {
-      return undefined
-    }
-  }
-
   // ── upsert ──
   const upsertEntry = (
     partial: Omit<SubEntry, "startedAt" | "endedAt"> & { startedAt?: number }
@@ -535,12 +452,12 @@ function SubAgentPanel(props: {
   const isDescendantOf = (childId: string, rootId: string): boolean => {
     const visited = new Set<string>()
     try {
-      let current = props.api.state.session.get(childId) as any
+      let current = props.api.session.get(childId) as any
       while (current?.parentID) {
         if (visited.has(current.id)) return false
         visited.add(current.id)
         if (current.parentID === rootId) return true
-        current = props.api.state.session.get(current.parentID) as any
+        current = props.api.session.get(current.parentID) as any
       }
     } catch {}
     return false
@@ -554,43 +471,31 @@ function SubAgentPanel(props: {
   const cancelEntry = async (entry: SubEntry) => {
     const childId = entry.sessionId
     if (!childId) {
-      props.api.ui.toast({
-        title: entry.title || entry.agent,
-                message: t("cancel.label") + ": " + t("cancel.no_session"),
-      })
+      props.api.ui.toast(t("cancel.label") + ": " + t("cancel.no_session"), { title: entry.title || entry.agent })
       return
     }
 
     try {
-      const child = props.api.state.session.get(childId) as any
+      const child = props.api.session.get(childId) as any
       if (!child?.parentID) {
-        props.api.ui.toast({
-          title: entry.title || entry.agent,
-                message: t("cancel.label") + ": " + t("cancel.not_child"),
-        })
+        props.api.ui.toast(t("cancel.label") + ": " + t("cancel.not_child"), { title: entry.title || entry.agent })
         return
       }
     } catch {
-      props.api.ui.toast({
-        title: entry.title || entry.agent,
-                message: t("cancel.label") + ": " + t("cancel.read_error"),
-      })
+      props.api.ui.toast(t("cancel.label") + ": " + t("cancel.read_error"), { title: entry.title || entry.agent })
       return
     }
 
     if (!isDescendantOf(childId, props.sessionId)) {
-      props.api.ui.toast({
-        title: entry.title || entry.agent,
-                message: t("cancel.label") + ": " + t("cancel.outside_tree"),
-      })
+      props.api.ui.toast(t("cancel.label") + ": " + t("cancel.outside_tree"), { title: entry.title || entry.agent })
       return
     }
 
     try {
-      const st = props.api.state.session.status(childId)
+      const st = props.api.session.status(childId)
       if (st?.type !== "busy") {
-        const tokens = readSessionTokens(childId)
-        const cost = readSessionCost(childId)
+        const tokens = props.api.usage.readSessionTokens(childId)
+        const cost = props.api.usage.readSessionCost(childId)
         upsertEntry({
           id: entry.id, title: entry.title, agent: entry.agent, prompt: entry.prompt,
           status: "done", sessionId: entry.sessionId,
@@ -599,10 +504,7 @@ function SubAgentPanel(props: {
         return
       }
     } catch {
-      props.api.ui.toast({
-        title: entry.title || entry.agent,
-                message: t("cancel.label") + ": " + t("cancel.status_error"),
-      })
+      props.api.ui.toast(t("cancel.label") + ": " + t("cancel.status_error"), { title: entry.title || entry.agent })
       return
     }
 
@@ -613,31 +515,26 @@ function SubAgentPanel(props: {
     } as any)
 
     try {
-      await (props.api as any).client.session.abort({ sessionID: childId })
+      await props.api.client.abort({ sessionID: childId })
       upsertEntry({
         id: entry.id, title: entry.title, agent: entry.agent, prompt: entry.prompt,
         status: "cancel_requested", sessionId: entry.sessionId,
         abortAccepted: true,
       } as any)
-      props.api.ui.toast({ message: t("cancel.label") + ": " + t("cancel.sent") })
+      props.api.ui.toast(t("cancel.label") + ": " + t("cancel.sent"))
     } catch (err) {
       upsertEntry({
         id: entry.id, title: entry.title, agent: entry.agent, prompt: entry.prompt,
         status: "error", sessionId: entry.sessionId,
         error: String(err),
       })
-      props.api.ui.toast({
-        title: entry.title || entry.agent,
-                message: t("cancel.label") + ": " + t("cancel.failed"),
-      })
+      props.api.ui.toast(t("cancel.label") + ": " + t("cancel.failed"), { title: entry.title || entry.agent })
     }
   }
 
   // ── event handlers ──
-  const handlePartUpdated = (event: unknown) => {
-    const e = event as Record<string, unknown>
-    const props_ = e.properties as Record<string, unknown> | undefined
-    const part = props_?.part as Record<string, unknown> | undefined
+  const handlePartUpdated = (event: PanelEvent) => {
+    const part = event.payload?.part as Record<string, unknown> | undefined
     if (!part) return
 
     // SubtaskPart
@@ -707,26 +604,25 @@ function SubAgentPanel(props: {
     }
   }
 
-  const handleSessionEnd = (event: unknown, status: SubStatus) => {
-    const e = event as Record<string, unknown>
-    const props_ = e.properties as Record<string, unknown> | undefined
+  const handleSessionEnd = (event: PanelEvent, status: SubStatus) => {
+    const props_ = event.payload
     const sid = String(props_?.sessionID ?? "")
     if (!sid) return
 
-    const sessionTokens = readSessionTokens(sid)
-    const sessionCost = readSessionCost(sid)
-    const sessionModel = readSessionModel(sid)
-    const sessionTodo = readSessionTodo(sid)
+    const sessionTokens = props.api.usage.readSessionTokens(sid)
+    const sessionCost = props.api.usage.readSessionCost(sid)
+    const sessionModel = props.api.usage.readSessionModel(sid)
+    const sessionTodo = props.api.usage.readSessionTodo(sid)
     let sessionAgent: string | undefined
     let errorMsg: string | undefined
     try {
-      const s = props.api.state.session.get(sid)
+      const s = props.api.session.get(sid)
       sessionAgent = s?.agent
       if (status === "error") {
         const evtErr = props_?.error as Record<string, unknown> | undefined
         errorMsg = safeErrorMsg(evtErr) || safeErrorMsg(props_?.message)
         if (!errorMsg) {
-          const msgs = props.api.state.session.messages(sid)
+          const msgs = props.api.session.messages(sid)
           if (msgs) {
             for (let i = (msgs as any[]).length - 1; i >= 0; i--) {
               const m = (msgs as any[])[i]
@@ -870,7 +766,7 @@ function SubAgentPanel(props: {
     // 当子代理所属的父 session 与当前视图不同时，通过模块级缓存定位
     // 并更新父 session 的 entry 状态，随后写回 KV。
     try {
-      const sessionObj = props.api.state.session.get(sid)
+      const sessionObj = props.api.session.get(sid)
       const parentSid = sessionObj?.parentID
       if (parentSid && parentSid !== props.sessionId) {
         // 优先从模块级缓存获取父 session 的 entries，不受当前视图切换影响
@@ -911,10 +807,10 @@ function SubAgentPanel(props: {
     // token/cost values that may not have been available when session.idle fired.
     setTimeout(() => {
       if (disposed) return
-      const finalTokens = readSessionTokens(sid)
-      const finalCost = readSessionCost(sid)
-      const finalModel = readSessionModel(sid)
-      const finalTodo = readSessionTodo(sid)
+      const finalTokens = props.api.usage.readSessionTokens(sid)
+      const finalCost = props.api.usage.readSessionCost(sid)
+      const finalModel = props.api.usage.readSessionModel(sid)
+      const finalTodo = props.api.usage.readSessionTodo(sid)
       setEntryMap((prev) => {
         let changed = false
         const next = new Map(prev)
@@ -954,13 +850,13 @@ function SubAgentPanel(props: {
               // Only read from child sessions, never the parent
               let isChild = false
               try {
-                const s = props.api.state.session.get(entry.sessionId)
+                const s = props.api.session.get(entry.sessionId)
                 isChild = s?.parentID === props.sessionId
               } catch {}
               if (!isChild) continue
-              const total = readSessionTokens(entry.sessionId)
-              const todo = readSessionTodo(entry.sessionId)
-              const model = entry.model ?? readSessionModel(entry.sessionId)
+              const total = props.api.usage.readSessionTokens(entry.sessionId)
+              const todo = props.api.usage.readSessionTodo(entry.sessionId)
+              const model = entry.model ?? props.api.usage.readSessionModel(entry.sessionId)
               const nextEntry: SubEntry = { ...entry }
               if (total !== undefined && total !== entry.tokens) { nextEntry.tokens = total; changed = true }
               if (todo !== undefined) {
@@ -979,7 +875,7 @@ function SubAgentPanel(props: {
     }, 500)
     bump()
 
-    const unsubPart = props.api.event.on("message.part.updated", (e) => {
+    const unsubPart = props.api.event.on("part.updated", (e) => {
       handlePartUpdated(e)
       bump()
     })
@@ -1043,10 +939,10 @@ function SubAgentPanel(props: {
           const scanRec = loadSessionData()[scanPSid]
           const clearedIds = new Set(scanChild ? scanRec?.children?.[sid]?.clearedIds : scanRec?.clearedIds)
           try {
-            const msgs = props.api.state.session.messages(sid)
+            const msgs = props.api.session.messages(sid)
             if (msgs && (msgs as any[]).length) {
               for (const msg of msgs) {
-                const parts = props.api.state.part(msg.id) ?? []
+                const parts = props.api.session.part((msg as any).id) ?? []
                 for (const partRaw of parts) {
                   const part = partRaw as Record<string, unknown>
 
@@ -1120,7 +1016,7 @@ function SubAgentPanel(props: {
                     const scanSubSid = scanStMeta2?.session_id !== undefined ? String(scanStMeta2.session_id)
                       : scanStMeta2?.sessionId !== undefined ? String(scanStMeta2.sessionId)
                       : undefined
-                    if (scanSubSid) tokens = readSessionTokens(scanSubSid)
+                    if (scanSubSid) tokens = props.api.usage.readSessionTokens(scanSubSid)
 
                     const ended = status === "done"  // "error" handled above, never reaches here
                     next.set(id, {
@@ -1147,10 +1043,10 @@ function SubAgentPanel(props: {
           for (const [id, entry] of next) {
             if ((entry.status !== "running" && entry.status !== "cancel_requested") || !entry.sessionId) continue
             try {
-              const st = props.api.state.session.status(entry.sessionId)
+              const st = props.api.session.status(entry.sessionId)
               if (!st || st.type !== "idle") continue
-              const tokens = readSessionTokens(entry.sessionId)
-              const cost = readSessionCost(entry.sessionId)
+              const tokens = props.api.usage.readSessionTokens(entry.sessionId)
+              const cost = props.api.usage.readSessionCost(entry.sessionId)
               const finalStatus = entry.status === "cancel_requested" && entry.abortAccepted
                 ? "cancelled" as SubStatus
                 : "done" as SubStatus
@@ -1598,19 +1494,17 @@ function SubAgentPanel(props: {
                           const result = await copyText(sessionId)
 
                           if (result.copied) {
-                            props.api.ui.toast({
+                            props.api.ui.toast(t("session.toast.copied"), {
                               variant: "success",
                               title: entry.title || entry.agent,
-                              message: t("session.toast.copied"),
                               duration: 2500,
                             })
                             return
                           }
 
-                          props.api.ui.toast({
+                          props.api.ui.toast(`${sessionId}\n\n${t("session.toast.copy_failed")}`, {
                             variant: "warning",
                             title: entry.title || entry.agent,
-                            message: `${sessionId}\n\n${t("session.toast.copy_failed")}`,
                             duration: 8000,
                           })
                         }}
@@ -1640,7 +1534,7 @@ function SubAgentPanel(props: {
                                 onMouseOut={() => setHoveredOpen(undefined)}
                                 onMouseUp={() => {
                                   if (entry.sessionId) {
-                                    props.api.route.navigate("session", { sessionID: entry.sessionId })
+                                    props.api.route.navigateSession(entry.sessionId)
                                   }
                                 }}
                               >
@@ -1756,7 +1650,7 @@ interface SharedSignals {
   sessionId: string
 }
 
-function createSidebarSlot(api: TuiPluginApi, sig: SharedSignals): TuiSlotPlugin {
+function createSidebarSlot(api: TuiPluginApi, panelApi: PanelApi, sig: SharedSignals): TuiSlotPlugin {
   return {
     order: 60,
     slots: {
@@ -1764,8 +1658,8 @@ function createSidebarSlot(api: TuiPluginApi, sig: SharedSignals): TuiSlotPlugin
         sig.sessionId = input.session_id
         return (
           <SubAgentPanel
-            theme={ctx.theme.current}
-            api={api}
+            api={panelApi}
+            theme={ctx.theme.current as Record<string, unknown>}
             lang={sig.lang}
             maxEntries={sig.maxEntries}
             sortOrder={sig.sortOrder}
@@ -1798,7 +1692,119 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
 
   const signals: SharedSignals = { lang, setLang, maxEntries, setMaxEntries, sortOrder, setSortOrder, scrollMode, setScrollMode, sessionId: "" }
 
-  api.slots.register(createSidebarSlot(api, signals))
+  // ── V1 PanelApi adapter: wraps the V1 host API into the shared panel contract ──
+  const v1Api: PanelApi = {
+    kv: api.kv as any,
+    usage: {
+      readSessionTokens: (sid: string): number | undefined => {
+        if (!sid) return undefined
+        try {
+          const msgs = api.state.session.messages(sid)
+          if (msgs) {
+            for (let i = (msgs as any[]).length - 1; i >= 0; i--) {
+              const m = (msgs as any[])[i]
+              if (m.role !== "assistant") continue
+              const t = m.tokens
+              if (!t || !(Number(t.output) > 0)) continue
+              const ctx =
+                (Number(t.input) || 0) +
+                (Number(t.output) || 0) +
+                (Number(t.reasoning) || 0) +
+                (Number(t.cache?.read) || 0) +
+                (Number(t.cache?.write) || 0)
+              if (ctx > 0) return ctx
+            }
+          }
+          return undefined
+        } catch {
+          return undefined
+        }
+      },
+      readSessionCost: (sid: string): number | undefined => {
+        if (!sid) return undefined
+        try {
+          const session = api.state.session.get(sid)
+          if (session?.cost != null && session.cost > 0) return session.cost
+          const msgs = api.state.session.messages(sid)
+          if (!msgs) return undefined
+          let total = 0
+          for (const m of msgs as any[]) {
+            if (m.role === "assistant" && typeof m.cost === "number") total += m.cost
+          }
+          return total > 0 ? total : undefined
+        } catch {
+          return undefined
+        }
+      },
+      readSessionModel: (sid: string): string | undefined => {
+        if (!sid) return undefined
+        try {
+          const msgs = api.state.session.messages(sid)
+          if (msgs) {
+            for (let i = (msgs as any[]).length - 1; i >= 0; i--) {
+              const m = (msgs as any[])[i]
+              if (m.role === "assistant" && m.modelID) return String(m.modelID)
+            }
+          }
+          return undefined
+        } catch {
+          return undefined
+        }
+      },
+      readSessionTodo: (sid: string): { total: number; done: number } | undefined => {
+        if (!sid) return undefined
+        try {
+          const todos = api.state.session.todo(sid)
+          if (!todos || todos.length === 0) return undefined
+          let done = 0
+          for (const t of todos) {
+            if (t.status === "completed" || t.status === "cancelled") done++
+          }
+          return { total: todos.length, done }
+        } catch {
+          return undefined
+        }
+      },
+    },
+    session: {
+      get: (sid) => { try { return api.state.session.get(sid) as any } catch { return undefined } },
+      status: (sid) => { try { return api.state.session.status(sid) as any } catch { return undefined } },
+      messages: (sid) => { try { return api.state.session.messages(sid) as any[] } catch { return undefined } },
+      part: (messageID) => { try { return api.state.part(messageID) as any[] } catch { return undefined } },
+    },
+    event: {
+      on: (type, cb) => {
+        switch (type) {
+          case "part.updated":
+            return api.event.on("message.part.updated", (e) =>
+              cb({ type, payload: { part: (e as any).properties?.part } }))
+          case "message.updated":
+            return api.event.on("message.updated", () => cb({ type }))
+          case "session.idle":
+            return api.event.on("session.idle", (e) => cb({ type, payload: (e as any).properties }))
+          case "session.error":
+            return api.event.on("session.error", (e) => cb({ type, payload: (e as any).properties }))
+        }
+      },
+    },
+    client: {
+      abort: (input) => api.client.session.abort(input).then(() => {}),
+    },
+    route: {
+      navigateSession: (sessionID) => api.route.navigate("session", { sessionID }),
+    },
+    ui: {
+      toast: (message, opts) => api.ui.toast({ ...opts, message } as any),
+    },
+    settings: {
+      lang: () => lang(),
+      maxEntries: () => maxEntries(),
+      sortOrder: () => sortOrder(),
+      scrollMode: () => scrollMode(),
+    },
+  }
+
+  api.slots.register(createSidebarSlot(api, v1Api, signals))
 
   // ── slash command: /subagent-lang ──
   api.command?.register(() => [
