@@ -1,6 +1,6 @@
 /** Morandi palette helpers — desaturate any theme color toward a muted fallback. */
 
-function rgb(raw: unknown): { r: number; g: number; b: number } | null {
+export function rgb(raw: unknown): { r: number; g: number; b: number } | null {
   if (typeof raw === "string" && raw.startsWith("#")) {
     const h = raw.slice(1)
     return {
@@ -19,7 +19,7 @@ function rgb(raw: unknown): { r: number; g: number; b: number } | null {
   return null
 }
 
-function saturation(r: number, g: number, b: number): number {
+export function saturation(r: number, g: number, b: number): number {
   const max = Math.max(r, g, b) / 255
   const min = Math.min(r, g, b) / 255
   const delta = max - min
