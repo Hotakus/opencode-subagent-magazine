@@ -23,6 +23,7 @@ export function makeCommands(context: Context, api: PanelApi, signals: SharedSig
 
   return [
     {
+      id: "opencode-subagent-magazine.subagent.lang",
       title: "SubAgent Magazine: Language",
       description: "Switch display language (中文 / English / 日本語 / 한국어)",
       slash: { name: "subagent-lang" },
@@ -39,6 +40,7 @@ export function makeCommands(context: Context, api: PanelApi, signals: SharedSig
       },
     },
     {
+      id: "opencode-subagent-magazine.subagent.order",
       title: "SubAgent Magazine: Sort Order",
       description: "Set sub-agent entry sort order (desc / asc)",
       slash: { name: "subagent-order" },
@@ -58,6 +60,7 @@ export function makeCommands(context: Context, api: PanelApi, signals: SharedSig
       },
     },
     {
+      id: "opencode-subagent-magazine.subagent.scroll",
       title: "SubAgent Magazine: Scroll Mode",
       description: "Set scroll mode (wheel / click)",
       slash: { name: "subagent-scroll" },
@@ -77,6 +80,7 @@ export function makeCommands(context: Context, api: PanelApi, signals: SharedSig
       },
     },
     {
+      id: "opencode-subagent-magazine.subagent.max",
       title: "SubAgent Magazine: Max Entries",
       description: "Set max visible sub-agent entries in sidebar",
       slash: { name: "subagent-max" },
@@ -95,6 +99,7 @@ export function makeCommands(context: Context, api: PanelApi, signals: SharedSig
       },
     },
     {
+      id: "opencode-subagent-magazine.subagent.version",
       title: "SubAgent Magazine: Version",
       description: "Show plugin version",
       slash: { name: "subagent-version" },
@@ -104,6 +109,7 @@ export function makeCommands(context: Context, api: PanelApi, signals: SharedSig
       },
     },
     {
+      id: "opencode-subagent-magazine.subagent.session",
       title: "SubAgent Magazine: Session",
       description: "Show current session ID",
       slash: { name: "subagent-session" },
@@ -113,6 +119,7 @@ export function makeCommands(context: Context, api: PanelApi, signals: SharedSig
       },
     },
     {
+      id: "opencode-subagent-magazine.subagent.clear-running",
       title: "SubAgent Magazine: Clear Running",
       description: "Mark all running sub-agent entries as done (for stuck/zombie entries)",
       slash: { name: "subagent-clear-running" },
@@ -161,6 +168,7 @@ export function makeCommands(context: Context, api: PanelApi, signals: SharedSig
       },
     },
     {
+      id: "opencode-subagent-magazine.subagent.ttl",
       title: "SubAgent Magazine: TTL",
       description: "Set session data retention period (days before auto-cleanup)",
       slash: { name: "subagent-ttl" },
@@ -184,6 +192,7 @@ export function makeCommands(context: Context, api: PanelApi, signals: SharedSig
       },
     },
     {
+      id: "opencode-subagent-magazine.subagent.clear-entries",
       title: "SubAgent Magazine: Clear Entries",
       description: "Delete all sub-agent records for the current session (cannot be undone)",
       slash: { name: "subagent-clear-entries" },

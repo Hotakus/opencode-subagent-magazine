@@ -45,8 +45,9 @@ function toV1Part(p: Record<string, any>): Record<string, any> {
 export function createPanelApi(context: Context, settings: PanelApi["settings"]): PanelApi {
   const kvStore = new Map<string, [Record<string, any>, (fn: (d: Record<string, any>) => void) => Promise<void>]>()
   const messageIndex = new Map<string, Record<string, any>>()
-  // tool 名记忆：called 事件可能不带 name——input.started 时记录（key: msgID\u0000id）
-  const toolNames = new Map<string, string>()
+  // 工具信息记忆（key: msgID\u0000id）：called 事件可能不带 name——input.started 时记录；
+  // progress/success/failed 复用（含 input——防后续事件的空 input 覆盖 title/prompt）
+  const toolInfo = new Map<string, { name?: string; input?: Record<string, unknown> }>()
 
   const kvGet = <T>(key: string, fallback?: T): T | undefined => {
     let entry = kvStore.get(key)
@@ -76,42 +77,62 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
   const isSubagentTool = (name: string | undefined): boolean =>
     name === SUBAGENT_TOOL_V2 || name === "task" || name === "delegate" || name === "call_omo_agent"
 
-  /** V2 tool 事件 → V1 ToolPart（非 subagent 工具返回 undefined——面板只关心子代理）。 */
+  /** V2 tool 事件 → V1 ToolPart（非 subagent 工具返回 undefined——面板只关心子代理）。
+   *  识别规则（对齐 V2 官方 stream-v2.subagent.ts）：
+   *  - input.started/called：工具名在 subagent 集合（subagent/task/delegate/call_omo_agent）
+   *  - progress：工具名记忆（input.started/called 记录——无记录忽略，防误识别）
+   *  - success/failed：metadata.sessionID 存在（subagent 工具注入子会话 ID——question 等
+   *    普通工具无此字段——忽略）
+   *  归一化：subagent → task（V1 SUBAGENT_TOOLS 集合命中）；subagent_type 补 input.agent
+   *  （V1 逻辑读 subagent_type 显示真实 agent 名）。 */
   const toolEventToPart = (event: Record<string, any>): Record<string, any> | undefined => {
     const type = event.type as string
     const data = event.data as Record<string, any> | undefined
     if (!data) return undefined
     const key = data.assistantMessageID !== undefined ? `${String(data.assistantMessageID)}\u0000${String(data.id)}` : undefined
+    const info = key ? toolInfo.get(key) : undefined
+    const normName = (n: string) => (n === SUBAGENT_TOOL_V2 ? "task" : n)
+    const agentOf = (input: any): string | undefined => {
+      const i = (input && typeof input === "object") ? input : {}
+      return typeof i.agent === "string" ? i.agent : undefined
+    }
     if (type === "session.tool.input.started") {
       if (!isSubagentTool(data.name)) return undefined
-      if (key) toolNames.set(key, String(data.name))
-      return { type: "tool", tool: String(data.name), id: String(data.id), state: { status: "pending", input: "" } }
+      if (key) toolInfo.set(key, { name: String(data.name), input: {} })
+      return { type: "tool", tool: normName(String(data.name)), id: String(data.id), state: { status: "pending", input: {} } }
     }
     if (type === "session.tool.called") {
-      const name = data.name ?? (key ? toolNames.get(key) : undefined)
+      const name = data.name ?? info?.name
       if (name && !isSubagentTool(name)) return undefined
       if (!name) return undefined
+      if (key) toolInfo.set(key, { name: String(name), input: data.input ?? {} })
       return {
-        type: "tool", tool: String(name), id: String(data.id),
+        type: "tool", tool: normName(String(name)), id: String(data.id), subagent_type: agentOf(data.input),
         state: { status: "running", input: data.input ?? {}, metadata: {} },
       }
     }
     if (type === "session.tool.progress") {
+      const name = data.name ?? info?.name
+      if (name && !isSubagentTool(name)) return undefined
+      if (!name) return undefined
       return {
-        type: "tool", tool: "task", id: String(data.id),
-        state: { status: "running", input: {}, metadata: normalizeMeta(data.metadata) },
+        type: "tool", tool: normName(String(name)), id: String(data.id), subagent_type: agentOf(info?.input),
+        state: { status: "running", input: info?.input ?? {}, metadata: normalizeMeta(data.metadata) },
       }
     }
-    if (type === "session.tool.success") {
+    if (type === "session.tool.success" || type === "session.tool.failed") {
+      const meta = normalizeMeta(data.metadata)
+      if (meta.sessionID === undefined) return undefined
+      const name = data.name ?? info?.name
+      if (name && !isSubagentTool(name)) return undefined
+      const input = info?.input ?? data.input ?? {}
       return {
-        type: "tool", tool: "task", id: String(data.id),
-        state: { status: "completed", input: data.input ?? {}, metadata: normalizeMeta(data.metadata) },
-      }
-    }
-    if (type === "session.tool.failed") {
-      return {
-        type: "tool", tool: "task", id: String(data.id),
-        state: { status: "error", input: data.input ?? {}, metadata: normalizeMeta(data.metadata) },
+        type: "tool", tool: normName(String(name ?? "task")), id: String(data.id), subagent_type: agentOf(input),
+        state: {
+          status: type === "session.tool.failed" ? "error" : "completed",
+          input,
+          metadata: meta,
+        },
       }
     }
     return undefined
@@ -199,7 +220,11 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
       status: (sid) => {
         try {
           const st = context.data.session.status(sid)
-          return { type: st ?? "" }
+          // V2 的 status 值（running/idle…）→ V1 语义（busy/idle…）：
+          // V1 cancelEntry 检查 `st.type !== "busy"`（busy=运行中→走取消流程）；
+          // V2 的 "running" 等价 V1 的 "busy"——不映射会跳过取消直接标记 done。
+          const type = st === "running" ? "busy" : st ?? ""
+          return { type }
         } catch { return undefined }
       },
       messages: (sid) => { try { return normalizeMessages(sid) } catch { return undefined } },
