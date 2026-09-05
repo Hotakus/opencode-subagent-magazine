@@ -21,6 +21,7 @@ import { rgb, desaturateTo, dimColor, FALLBACK, MAX_SAT } from "../core/color"
 import { KV_PREFIX } from "../core/kv"
 import type { PanelApi, PanelEvent } from "./panel-api"
 import { globalEntryCache, clearTick } from "./store"
+import { isDirectChildSession } from "./session-routing"
 
 /** Entry line left prefix: icon + space + status dot + space */
 const LEFT_PAD = 4
@@ -363,7 +364,7 @@ export function SubAgentPanel(props: {
     // V2 事件流是全局的——若 payload 带发起会话 ID，则只归账到正在查看的会话，
     // 避免其他会话的子代理写进当前侧边栏；V1 宿主已按会话 scope，不传 sessionID。
     const eventSid = event.payload?.sessionID !== undefined ? String(event.payload.sessionID) : undefined
-    if (eventSid !== undefined && eventSid !== props.sessionId) return
+    if (event.scope === "global" && eventSid !== props.sessionId) return
 
     // SubtaskPart
     if (part.type === "subtask") {
@@ -436,6 +437,13 @@ export function SubAgentPanel(props: {
     const props_ = event.payload
     const sid = String(props_?.sessionID ?? "")
     if (!sid) return
+
+    const isGlobalEvent = event.scope === "global"
+    let eventSession: ReturnType<PanelApi["session"]["get"]>
+    if (isGlobalEvent) {
+      try { eventSession = props.api.session.get(sid) } catch { eventSession = undefined }
+    }
+    const isCurrentChild = !isGlobalEvent || isDirectChildSession(props.sessionId, sid, eventSession)
 
     const sessionTokens = props.api.usage.readSessionTokens(sid)
     const sessionCost = props.api.usage.readSessionCost(sid)
@@ -529,7 +537,7 @@ export function SubAgentPanel(props: {
       let changed = false
       const next = new Map(prev)
       for (const [id, entry] of next) {
-        if (entry.sessionId !== sid) continue
+        if (!isCurrentChild || entry.sessionId !== sid) continue
         if (entry.status !== "running" && entry.status !== "done" && entry.status !== "cancel_requested") continue
         // Skip parent session idle — subagent entries belong to child sessions only
         if (sid === props.sessionId) continue
@@ -548,7 +556,7 @@ export function SubAgentPanel(props: {
         })
         changed = true
       }
-      if (!changed && sessionAgent) {
+      if (!changed && sessionAgent && isCurrentChild) {
         const nowTs = Date.now()
         const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9-]/g, "")
         const saNorm = normalize(sessionAgent)
@@ -594,8 +602,7 @@ export function SubAgentPanel(props: {
     // 当子代理所属的父 session 与当前视图不同时，通过模块级缓存定位
     // 并更新父 session 的 entry 状态，随后写回 KV。
     try {
-      const sessionObj = props.api.session.get(sid)
-      const parentSid = sessionObj?.parentID
+      const parentSid = (isGlobalEvent ? eventSession : props.api.session.get(sid))?.parentID
       if (parentSid && parentSid !== props.sessionId) {
         // 优先从模块级缓存获取父 session 的 entries，不受当前视图切换影响
         const parentCache = globalEntryCache.get(parentSid)

@@ -256,7 +256,8 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
                 // 让面板只归账到正在查看的会话（V1 宿主已按会话 scope，无需该字段）。
                 const evt = (e as Record<string, any>).data as Record<string, any> | undefined
                 const sid = evt?.sessionID !== undefined ? String(evt.sessionID) : undefined
-                cb({ type, payload: { part, sessionID: sid } })
+                if (!sid) return
+                cb({ type, scope: "global", payload: { part, sessionID: sid } })
               }))
             }
             return () => { for (const u of unsubs) u() }
@@ -275,7 +276,7 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
             for (const evt of ["session.execution.succeeded", "session.execution.interrupted"]) {
               unsubs.push(context.data.on(evt, (e) => {
                 const sid = String(((e as Record<string, any>).data as Record<string, any> | undefined)?.sessionID ?? "")
-                if (sid) cb({ type, payload: { sessionID: sid } })
+                if (sid) cb({ type, scope: "global", payload: { sessionID: sid } })
               }))
             }
             return () => { for (const u of unsubs) u() }
@@ -284,7 +285,7 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
             return context.data.on("session.execution.failed", (e) => {
               const evt = (e as Record<string, any>).data as Record<string, any> | undefined
               const sid = String(evt?.sessionID ?? "")
-              if (sid) cb({ type, payload: { sessionID: sid, error: evt?.error } })
+              if (sid) cb({ type, scope: "global", payload: { sessionID: sid, error: evt?.error } })
             })
           default:
             return () => {}
