@@ -360,6 +360,11 @@ export function SubAgentPanel(props: {
     const part = event.payload?.part as Record<string, unknown> | undefined
     if (!part) return
 
+    // V2 事件流是全局的——若 payload 带发起会话 ID，则只归账到正在查看的会话，
+    // 避免其他会话的子代理写进当前侧边栏；V1 宿主已按会话 scope，不传 sessionID。
+    const eventSid = event.payload?.sessionID !== undefined ? String(event.payload.sessionID) : undefined
+    if (eventSid !== undefined && eventSid !== props.sessionId) return
+
     // SubtaskPart
     if (part.type === "subtask") {
       const agent = String(part.agent ?? "?")
@@ -411,7 +416,7 @@ export function SubAgentPanel(props: {
         if (hasChild) status = "running"
       }
 
-      const agent = String((part as any).subagent_type ?? input?.subagent_type ?? input?.category ?? tool)
+      const agent = String((part as any).subagent_type ?? input?.agent ?? input?.subagent_type ?? input?.category ?? tool)
       const prompt = String(input?.prompt ?? (part as any).description ?? "")
       const desc = input?.description !== undefined ? String(input.description) : ""
       const title = desc || truncate(prompt.replace(/\n/g, " ").replace(/\s+/g, " ").trim(), 40)
@@ -829,7 +834,7 @@ export function SubAgentPanel(props: {
                     // If not tracked → add fresh
 
                     const input = st?.input as Record<string, unknown> | undefined
-                    const agent = String((part as any).subagent_type ?? input?.subagent_type ?? tool)
+                    const agent = String((part as any).subagent_type ?? input?.agent ?? input?.subagent_type ?? tool)
                     const prompt = String(input?.prompt ?? (part as any).description ?? "")
                     const desc = input?.description !== undefined ? String(input.description) : ""
                     const title = desc || truncate(prompt.replace(/\n/g, " ").trim(), 40)
