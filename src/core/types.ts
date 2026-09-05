@@ -27,7 +27,7 @@ export type SortOrder = "desc" | "asc"
 export type ScrollMode = "wheel" | "click"
 
 /** OpenCode built-in tool names that spawn sub-agents or delegate tasks. */
-export const SUBAGENT_TOOLS = new Set(["task", "delegate", "call_omo_agent"])
+export const SUBAGENT_TOOLS = new Set(["task", "subagent", "delegate", "call_omo_agent"])
 
 export interface ChildRecord {
   scroll: number
