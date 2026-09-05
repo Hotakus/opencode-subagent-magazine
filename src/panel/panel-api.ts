@@ -19,9 +19,12 @@ export interface SessionStatusLike {
  * into these shapes so the panel component never touches host APIs directly.
  */
 export type PanelEventType = "part.updated" | "message.updated" | "session.idle" | "session.error"
+export type PanelEventScope = "session" | "global"
 
 export interface PanelEvent {
   type: PanelEventType
+  /** Global V2 events need explicit session ownership checks. */
+  scope?: PanelEventScope
   /** part payload for part.updated; session properties for idle/error. */
   payload?: Record<string, unknown>
 }
