@@ -411,7 +411,7 @@ export function SubAgentPanel(props: {
         if (hasChild) status = "running"
       }
 
-      const agent = String((part as any).subagent_type ?? input?.subagent_type ?? input?.category ?? tool)
+      const agent = String((part as any).subagent_type ?? input?.agent ?? input?.subagent_type ?? input?.category ?? tool)
       const prompt = String(input?.prompt ?? (part as any).description ?? "")
       const desc = input?.description !== undefined ? String(input.description) : ""
       const title = desc || truncate(prompt.replace(/\n/g, " ").replace(/\s+/g, " ").trim(), 40)
@@ -829,7 +829,7 @@ export function SubAgentPanel(props: {
                     // If not tracked → add fresh
 
                     const input = st?.input as Record<string, unknown> | undefined
-                    const agent = String((part as any).subagent_type ?? input?.subagent_type ?? tool)
+                    const agent = String((part as any).subagent_type ?? input?.agent ?? input?.subagent_type ?? tool)
                     const prompt = String(input?.prompt ?? (part as any).description ?? "")
                     const desc = input?.description !== undefined ? String(input.description) : ""
                     const title = desc || truncate(prompt.replace(/\n/g, " ").trim(), 40)
