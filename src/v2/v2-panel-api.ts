@@ -251,7 +251,12 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
             for (const evt of ["session.tool.input.started", "session.tool.called", "session.tool.progress", "session.tool.success", "session.tool.failed"]) {
               unsubs.push(context.data.on(evt, (e) => {
                 const part = toolEventToPart((e as Record<string, any>))
-                if (part) cb({ type, payload: { part } })
+                if (!part) return
+                // V2 事件流是全局的（跨所有会话）；把发起会话 ID 一并传给面板，
+                // 让面板只归账到正在查看的会话（V1 宿主已按会话 scope，无需该字段）。
+                const evt = (e as Record<string, any>).data as Record<string, any> | undefined
+                const sid = evt?.sessionID !== undefined ? String(evt.sessionID) : undefined
+                cb({ type, payload: { part, sessionID: sid } })
               }))
             }
             return () => { for (const u of unsubs) u() }
