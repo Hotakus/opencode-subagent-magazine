@@ -22,6 +22,7 @@ import { KV_PREFIX } from "../core/kv"
 import type { PanelApi, PanelEvent } from "./panel-api"
 import { globalEntryCache, clearTick } from "./store"
 import { isDirectChildSession } from "./session-routing"
+import { findSubEntryKey, upsertSubEntry } from "./entry-map"
 
 /** Entry line left prefix: icon + space + status dot + space */
 const LEFT_PAD = 4
@@ -87,14 +88,16 @@ export function SubAgentPanel(props: {
   }
 
   const loadEntries = (sid: string): Map<string, SubEntry> => {
-    const m = new Map<string, SubEntry>()
+    let m = new Map<string, SubEntry>()
     try {
       const { parentSid, isChild } = resolveParent(sid)
       const rec = loadSessionData()[parentSid]
       if (rec) {
         const source = isChild ? rec.children?.[sid]?.entries : rec.entries
         if (source) {
-          for (const e of source) m.set(e.id, e)
+          for (const e of source) {
+            m = upsertSubEntry(m, e)
+          }
         }
       }
     } catch {}
@@ -256,20 +259,7 @@ export function SubAgentPanel(props: {
   const upsertEntry = (
     partial: Omit<SubEntry, "startedAt" | "endedAt"> & { startedAt?: number }
   ) => {
-    setEntryMap((prev) => {
-      const existing = prev.get(partial.id)
-      const next = new Map(prev)
-      const nowTs = Date.now()
-      const e = partial.status
-      const ended = e === "done" || e === "error" || e === "cancelled"
-      next.set(partial.id, {
-        ...(existing ?? { startedAt: nowTs }),
-        ...partial,
-        startedAt: existing?.startedAt || partial.startedAt || nowTs,
-        endedAt: ended ? (existing?.endedAt || nowTs) : undefined,
-      })
-      return next
-    })
+    setEntryMap((prev) => upsertSubEntry(prev, partial))
   }
 
   // ── cancel helpers ──
@@ -397,9 +387,21 @@ export function SubAgentPanel(props: {
       if (rawStatus === "error") {
         const id = `tool:${String(part.id ?? "")}`
         if (!part.id) return
-        const existing = entryMap().get(id)
+        const stMeta = st?.metadata as Record<string, unknown> | undefined
+        const errorSid = stMeta?.session_id !== undefined ? String(stMeta.session_id)
+          : stMeta?.sessionId !== undefined ? String(stMeta.sessionId)
+          : undefined
+        const key = findSubEntryKey(entryMap(), id, errorSid)
+        const existing = key ? entryMap().get(key) : undefined
         if (existing) {
-          upsertEntry({ id, title: existing.title, agent: existing.agent, prompt: existing.prompt, status: "error" })
+          upsertEntry({
+            id: existing.id,
+            title: existing.title,
+            agent: existing.agent,
+            prompt: existing.prompt,
+            sessionId: existing.sessionId ?? errorSid,
+            status: "error",
+          })
         }
         return
       }
@@ -791,7 +793,12 @@ export function SubAgentPanel(props: {
 
                     const st = (part as any).state as Record<string, unknown> | undefined
                     const rawStatus = String(st?.status ?? "")
-                    const exists = next.get(id)
+                    const scanStMeta = st?.metadata as Record<string, unknown> | undefined
+                    const scanSubSid = scanStMeta?.session_id !== undefined ? String(scanStMeta.session_id)
+                      : scanStMeta?.sessionId !== undefined ? String(scanStMeta.sessionId)
+                      : undefined
+                    const existingKey = findSubEntryKey(next, id, scanSubSid)
+                    const exists = existingKey ? next.get(existingKey) : undefined
 
                     // 已手动清除的条目：scan 发现但不在内存 → 跳过重建
                     if (!exists && clearedIds.has(id)) continue
@@ -803,7 +810,7 @@ export function SubAgentPanel(props: {
                     // "error": only update existing, never create a new entry
                     if (rawStatus === "error") {
                       if (exists && exists.status === "running") {
-                        next.set(id, { ...exists, status: "error", endedAt: Date.now() })
+                        next.set(existingKey ?? id, { ...exists, status: "error", endedAt: Date.now() })
                       }
                       continue
                     }
@@ -819,7 +826,7 @@ export function SubAgentPanel(props: {
                     }
 
                     // Already settled → skip
-                    if (exists && exists.status !== "running" && exists.status !== "cancel_requested") continue
+                    if (exists && existingKey === id && exists.status !== "running" && exists.status !== "cancel_requested") continue
                     // Running entry with no explicit status improvement from part:
                     // try message-level heuristics first, then time-based fallback.
                     if (exists && status === "running") {
@@ -847,15 +854,12 @@ export function SubAgentPanel(props: {
                     const title = desc || truncate(prompt.replace(/\n/g, " ").trim(), 40)
 
                     let tokens: number | undefined
-                    const scanStMeta2 = st?.metadata as Record<string, unknown> | undefined
-                    const scanSubSid = scanStMeta2?.session_id !== undefined ? String(scanStMeta2.session_id)
-                      : scanStMeta2?.sessionId !== undefined ? String(scanStMeta2.sessionId)
-                      : undefined
                     if (scanSubSid) tokens = props.api.usage.readSessionTokens(scanSubSid)
 
                     const ended = status === "done"  // "error" handled above, never reaches here
-                    next.set(id, {
-                      id, title, agent, prompt,
+                    const entryKey = existingKey ?? id
+                    next.set(entryKey, {
+                      id: exists?.id ?? id, title, agent, prompt,
                       // Preserve existing values (from handleSessionEnd / KV) — scan must not overwrite
                       tokens: exists?.tokens ?? tokens,
                       sessionId: exists?.sessionId ?? scanSubSid,
@@ -863,6 +867,7 @@ export function SubAgentPanel(props: {
                       startedAt: exists?.startedAt || Date.now(),
                       endedAt: ended ? (exists?.endedAt || Date.now()) : undefined,
                     })
+                    if (entryKey !== id) next.delete(id)
                   }
                 }
               }
