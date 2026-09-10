@@ -56,7 +56,8 @@ Interested in token cache visualization? Check out [opencode-visual-cache](https
 - **TTL Auto Cleanup**: Configurable retention period (3/7/14/30 days or Never), auto-refreshed on access, expired data purged automatically
 - **Manual Entry Clear**: `/subagent-clear-entries` removes all records for the current session and prevents scan re-creation of historical entries
 - **Language Support**: Runtime language switch via `/subagent-lang` (Chinese / English), preference persisted
-- **Slash Commands**: `/subagent-lang`, `/subagent-max`, `/subagent-order`, `/subagent-scroll`, `/subagent-ttl`, `/subagent-clear-entries`, `/subagent-session`, `/subagent-version`, `/subagent-clear-running` for dynamic configuration
+- **Toggleable Border**: `/subagent-border` controls the panel border (hidden by default); when shown, it matches the cache stats panel style
+- **Slash Commands**: `/subagent-lang`, `/subagent-max`, `/subagent-order`, `/subagent-scroll`, `/subagent-ttl`, `/subagent-clear-entries`, `/subagent-session`, `/subagent-version`, `/subagent-clear-running`, `/subagent-border` for dynamic configuration
 
 ---
 
@@ -114,6 +115,7 @@ The plugin supports dynamic configuration via slash commands or the command pale
 | `/subagent-session` | View current session ID | Displays the current OpenCode session ID |
 | `/subagent-version` | View plugin version | Displays the current plugin version |
 | `/subagent-clear-running` | Batch cleanup stuck entries | Marks all running entries as done in one click, cleaning up stale data |
+| `/subagent-border` | Toggle panel border | Show/hide the panel border (hidden by default) |
 
 <div align="center">
   <img src="https://raw.githubusercontent.com/Hotakus/opencode-subagent-magazine/master/assets/slash_cmds.png" alt="Slash Commands" width="49%"></img>
