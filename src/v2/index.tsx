@@ -31,6 +31,7 @@ function PluginRoot(props: {
       maxEntries={props.signals.maxEntries}
       sortOrder={props.signals.sortOrder}
       scrollMode={props.signals.scrollMode}
+      borderVisible={props.signals.borderVisible}
       sessionId={props.sessionID}
     />
   )
@@ -65,13 +66,16 @@ const mod: PluginModule & { server: () => Promise<Record<string, never>> } = {
     const [scrollSignal, setScrollMode] = createSignal<ScrollMode>(
       String(api.kv.get(SETTING_KEYS.scrollMode, "wheel")) === "click" ? "click" : "wheel",
     )
+    const [borderSignal, setBorderVisible] = createSignal<boolean>(
+      (api.kv.get(SETTING_KEYS.border, false) as boolean) === true,
+    )
     lang = langSignal
     maxEntries = maxSignal
     sortOrder = orderSignal
     scrollMode = scrollSignal
 
     const signals: SharedSignals = {
-      lang, setLang, maxEntries, setMaxEntries, sortOrder, setSortOrder, scrollMode, setScrollMode, sessionId: "",
+      lang, setLang, maxEntries, setMaxEntries, sortOrder, setSortOrder, scrollMode, setScrollMode, borderVisible: borderSignal, setBorderVisible, sessionId: "",
     }
 
     // 命令 layer（组件内注册——见 PluginRoot）

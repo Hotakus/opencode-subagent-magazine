@@ -39,6 +39,7 @@ export function SubAgentPanel(props: {
   maxEntries: () => number
   sortOrder: () => SortOrder
   scrollMode: () => ScrollMode
+  borderVisible: () => boolean
   sessionId: string
 }): JSX.Element {
   const t = createT(() => props.lang())
@@ -1017,7 +1018,21 @@ export function SubAgentPanel(props: {
     })
   }
 
-  const sep = () => "\u2500".repeat(Math.max(1, panelWidth()))
+  /** Horizontal space eaten by the panel border (1+1) and its padding (2+2). */
+  const gutter = createMemo(() => (props.borderVisible() ? 6 : 0))
+
+  const sep = () => "\u2500".repeat(Math.max(1, panelWidth() - gutter()))
+
+  // The border toggling shifts the box dimensions, which may not reliably
+  // re-fire onSizeChange across (re)mount cycles; re-sync panelWidth with the
+  // live box so the content width stays correct.
+  createEffect(() => {
+    props.borderVisible()
+    if (boxEl && typeof boxEl.width === "number" && boxEl.width > 0) {
+      const w = Math.max(20, boxEl.width)
+      setPanelWidth((prev) => (prev === w ? prev : w))
+    }
+  })
 
   // ── expanded detail right-align ──
   const expandedMaxLabelW = createMemo(() => {
@@ -1030,7 +1045,7 @@ export function SubAgentPanel(props: {
 
   const expandedPad = (label: string) => Math.max(0, expandedMaxLabelW() - visualWidth(label + ": "))
 
-  const expandedValAvail = () => Math.max(6, panelWidth() - INDENT - expandedMaxLabelW())
+  const expandedValAvail = () => Math.max(6, panelWidth() - gutter() - INDENT - expandedMaxLabelW())
 
   // ── header parts for colored spans ──
   const summaryParts = createMemo(() => {
@@ -1064,7 +1079,7 @@ export function SubAgentPanel(props: {
     if (!open()) return false
     const icon = "\u25bc"
     const need = visualWidth(icon) + 1 + visualWidth(t("panel.title")) + versionW + summaryCols()
-    return need <= panelWidth()
+    return need <= panelWidth() - gutter()
   })
 
   const leftCols = createMemo(() => {
@@ -1076,17 +1091,19 @@ export function SubAgentPanel(props: {
 
   const spacerCols = createMemo(() => {
     if (!anyEntry()) return 0
-    return Math.max(0, panelWidth() - leftCols() - summaryCols())
+    return Math.max(0, panelWidth() - gutter() - leftCols() - summaryCols())
   })
 
   const valueCols = (label: string) =>
-    Math.max(4, panelWidth() - INDENT - visualWidth(label + ": "))
+    Math.max(4, panelWidth() - gutter() - INDENT - visualWidth(label + ": "))
 
   // ── render ──
   return (
     <box
-      border={false}
-      paddingTop={0} paddingBottom={0} paddingLeft={0} paddingRight={0}
+      border={props.borderVisible()}
+      {...(props.borderVisible() ? { borderColor: pal().border } : {})}
+      paddingTop={0} paddingBottom={0}
+      paddingLeft={props.borderVisible() ? 2 : 0} paddingRight={props.borderVisible() ? 2 : 0}
       flexDirection="column" gap={0}
       ref={boxEl}
       onSizeChange={() => {
@@ -1223,7 +1240,7 @@ export function SubAgentPanel(props: {
                 if (tk) w += visualWidth(tk)
                 return w
               }
-              const labelAvail = () => Math.max(6, panelWidth() - LEFT_PAD - suffixW())
+              const labelAvail = () => Math.max(6, panelWidth() - gutter() - LEFT_PAD - suffixW())
               const labelText = () => {
                 const max = labelAvail()
                 const text = entry.title || entry.agent
@@ -1365,7 +1382,7 @@ export function SubAgentPanel(props: {
                         const cancelLabel = () => ` ${t("cancel.label")}`
                         const dismissLabel = () => ` ${t("dismiss.label")}`
                         const rightW = (isRunning ? visualWidth(dismissLabel()) : 0) + (isRunning && entry.sessionId ? visualWidth(cancelLabel()) : 0)
-                        const spacerW = () => Math.max(1, panelWidth() - openW() - rightW - 2)
+                        const spacerW = () => Math.max(1, panelWidth() - gutter() - openW() - rightW - 2)
                         return (
                           <box flexDirection="row">
                             <Show when={entry.sessionId}>
@@ -1422,7 +1439,7 @@ export function SubAgentPanel(props: {
                 const right = props.sortOrder() === "desc"
                   ? `\u2191 ${t("scroll.top")}`
                   : `\u2193 ${t("scroll.bottom")}`
-                const pad = showTop ? Math.max(1, panelWidth() - visualWidth(left) - visualWidth(right)) : 0
+                const pad = showTop ? Math.max(1, panelWidth() - gutter() - visualWidth(left) - visualWidth(right)) : 0
                 return (
                   <box flexDirection="row">
                     <text

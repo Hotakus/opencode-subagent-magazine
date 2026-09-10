@@ -34,6 +34,7 @@ function createSidebarSlot(api: TuiPluginApi, panelApi: PanelApi, sig: SharedSig
             maxEntries={sig.maxEntries}
             sortOrder={sig.sortOrder}
             scrollMode={sig.scrollMode}
+            borderVisible={sig.borderVisible}
             sessionId={input.session_id}
           />
         )
@@ -57,8 +58,11 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
   const [scrollMode, setScrollMode] = createSignal<ScrollMode>(
     String(api.kv.get(`${KV_PREFIX}.scroll_mode`, "wheel")) === "click" ? "click" : "wheel"
   )
+  const [borderVisible, setBorderVisible] = createSignal<boolean>(
+    (api.kv.get(`${KV_PREFIX}.border`, false) as boolean) === true
+  )
 
-  const signals: SharedSignals = { lang, setLang, maxEntries, setMaxEntries, sortOrder, setSortOrder, scrollMode, setScrollMode, sessionId: "" }
+  const signals: SharedSignals = { lang, setLang, maxEntries, setMaxEntries, sortOrder, setSortOrder, scrollMode, setScrollMode, borderVisible, setBorderVisible, sessionId: "" }
 
   // ── V1 PanelApi adapter: wraps the V1 host API into the shared panel contract ──
   const v1Api: PanelApi = {
@@ -442,6 +446,20 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             }}
           />
         ))
+      },
+    },
+    {
+      title: "SubAgent Magazine: Border",
+      value: "subagent-border",
+      description: "Show or hide the panel border",
+      slash: { name: "subagent-border" },
+      onSelect: (dialog) => {
+        const t = createT(() => signals.lang())
+        const cur = Boolean(api.kv.get(`${KV_PREFIX}.border`, false))
+        api.kv.set(`${KV_PREFIX}.border`, !cur)
+        signals.setBorderVisible(!cur)
+        api.ui.toast({ message: !cur ? t("borderShown") : t("borderHidden") })
+        dialog?.clear()
       },
     },
   ])

@@ -54,5 +54,7 @@ export interface SharedSignals {
   setSortOrder: (o: SortOrder) => void
   scrollMode: () => ScrollMode
   setScrollMode: (m: ScrollMode) => void
+  borderVisible: () => boolean
+  setBorderVisible: (v: boolean) => void
   sessionId: string
 }
