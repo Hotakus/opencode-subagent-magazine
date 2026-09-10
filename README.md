@@ -56,7 +56,8 @@
 - **TTL 自动清理**：可配置数据保留期限（3/7/14/30 天/无期限），每次访问自动续期，过期自动清除
 - **手动清除条目**：`/subagent-clear-entries` 清除当前会话所有记录，防止历史条目扫描重建
 - **语言适配**：支持 `/subagent-lang` 运行时切换中/英文，偏好持久化
-- **斜杠命令**：`/subagent-lang` `/subagent-max` `/subagent-order` `/subagent-scroll` `/subagent-ttl` `/subagent-clear-entries` `/subagent-session` `/subagent-version` `/subagent-clear-running` 动态配置
+- **可切换边框**：`/subagent-border` 控制面板外边框显隐（默认隐藏），开启后与缓存统计面板风格统一
+- **斜杠命令**：`/subagent-lang` `/subagent-max` `/subagent-order` `/subagent-scroll` `/subagent-ttl` `/subagent-clear-entries` `/subagent-session` `/subagent-version` `/subagent-clear-running` `/subagent-border` 动态配置
 
 ---
 
@@ -114,6 +115,7 @@ npm install -g opencode-subagent-magazine@latest
 | `/subagent-session` | 查看当前会话 ID | 弹出当前 OpenCode 会话 ID |
 | `/subagent-version` | 查看插件版本 | 弹出当前插件版本号 |
 | `/subagent-clear-running` | 批量清理僵尸条目 | 一键将所有运行中的条目标记为完成，清理卡住的旧数据 |
+| `/subagent-border` | 开关面板边框 | 切换面板外边框显隐（默认隐藏），即时生效并持久化 |
 
 <div align="center">
   <img src="https://raw.githubusercontent.com/Hotakus/opencode-subagent-magazine/master/assets/slash_cmds.png" alt="斜杠命令" width="49%"></img>
