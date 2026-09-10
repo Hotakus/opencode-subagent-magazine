@@ -17,6 +17,7 @@ export const SETTING_KEYS = {
   scrollMode: `${KV_PREFIX}.scroll_mode`,
   open: `${KV_PREFIX}.open`,
   ttlDays: `${KV_PREFIX}.ttl_days`,
+  border: `${KV_PREFIX}.border`,
 } as const
 
 export function loadSessionData(kv: KVApi): Record<string, SessionRecord> {

@@ -245,6 +245,19 @@ export function makeCommands(context: Context, api: PanelApi, signals: SharedSig
         } catch {}
       },
     },
+    {
+      id: "opencode-subagent-magazine.subagent.border",
+      title: "SubAgent Magazine: Border",
+      description: "Show or hide the panel border",
+      slash: { name: "subagent-border" },
+      palette: true,
+      run: () => {
+        const cur = Boolean(kv.get(SETTING_KEYS.border, false))
+        kv.set(SETTING_KEYS.border, !cur)
+        signals.setBorderVisible(!cur)
+        api.ui.toast(!cur ? t("borderShown") : t("borderHidden"))
+      },
+    },
   ]
 }
 

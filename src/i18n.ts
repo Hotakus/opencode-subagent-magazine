@@ -56,6 +56,8 @@ const ZH_T = {
   "cancel.status_error": "无法查询会话状态",
   "cancel.sent": "已发送取消指令",
   "cancel.failed": "取消失败",
+  "borderShown": "面板边框 已显示",
+  "borderHidden": "面板边框 已隐藏",
 } as const
 
 /** 结构约束：值放宽为 string，键集合来自中文表（新增语言缺 key 会编译报错）。 */
@@ -111,6 +113,8 @@ const EN_T: Translation = {
   "cancel.status_error": "Cannot query session status",
   "cancel.sent": "Cancel instruction sent",
   "cancel.failed": "Cancellation failed",
+  "borderShown": "Panel border shown",
+  "borderHidden": "Panel border hidden",
 }
 
 const JA_T: Translation = {
@@ -163,6 +167,8 @@ const JA_T: Translation = {
   "cancel.status_error": "セッション状態を照会できません",
   "cancel.sent": "キャンセル指示を送信しました",
   "cancel.failed": "キャンセルに失敗しました",
+  "borderShown": "パネル枠線 表示",
+  "borderHidden": "パネル枠線 非表示",
 }
 
 const KO_T: Translation = {
@@ -215,6 +221,8 @@ const KO_T: Translation = {
   "cancel.status_error": "세션 상태를 조회할 수 없습니다",
   "cancel.sent": "취소 지시를 보냈습니다",
   "cancel.failed": "취소에 실패했습니다",
+  "borderShown": "패널 테두리 표시",
+  "borderHidden": "패널 테두리 숨김",
 }
 
 export const LANGS: Record<LangCode, Translation> = { zh: ZH_T, en: EN_T, ja: JA_T, ko: KO_T }
