@@ -10,10 +10,7 @@
       "types": "./dist/server.d.ts"
     },
     "./tui": {
-      "import": "./tui/index.js",
-      "config": {
-        "enabled": true
-      }
+      "import": "./tui/index.js"
     }
   },
   "files": [
@@ -49,9 +46,15 @@
   "peerDependencies": {
     "@opencode-ai/plugin": ">=1.14.0",
     "@opencode-ai/sdk": ">=1.14.0",
-    "@opentui/core": ">=0.2.0",
-    "@opentui/solid": ">=0.2.0",
+    "@opencode/plugin": ">=2.0.0",
+    "@opentui/core": ">=0.5.8",
+    "@opentui/solid": ">=0.5.8",
     "solid-js": ">=1.9.0"
+  },
+  "peerDependenciesMeta": {
+    "@opencode/plugin": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@opencode-ai/plugin": "^1.14.50",
