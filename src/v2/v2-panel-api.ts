@@ -1,5 +1,7 @@
 import type { Context } from "./types"
 import type { PanelApi, PanelEvent, PanelEventType } from "../panel/panel-api"
+import { SETTING_KEYS } from "../core/kv"
+import { createSessionDbIndex, statusOfChild } from "./db"
 
 const SUBAGENT_TOOL_V2 = "subagent"
 
@@ -104,6 +106,22 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
     return mutate((d) => { d.value = updater(d.value) })
   }
 
+  // 本地 opencode.db 索引：补全前台子代理缺失的 sessionId 与用量字段。
+  // 数据库不可用、库结构不符或设置项 dbSync 关闭时静默禁用（回退宿主 API）。
+  const dbIndex = createSessionDbIndex(() => kvGet<boolean>(SETTING_KEYS.dbSync, true) !== false)
+
+  /** 事件 metadata 缺少子会话 id 时用本地库按 call id 回填（前台/后台通用）。 */
+  const withResolvedSid = (data: Record<string, any>, meta: Record<string, unknown>): Record<string, unknown> => {
+    if (meta.sessionID !== undefined) return meta
+    try {
+      const parent = data.sessionID !== undefined ? String(data.sessionID) : ""
+      const callId = data.id !== undefined ? String(data.id) : ""
+      const sid = parent && callId ? dbIndex?.resolveCall(parent, callId) : undefined
+      if (sid) return normalizeMeta({ ...meta, sessionID: sid })
+    } catch {}
+    return meta
+  }
+
   const isSubagentTool = (name: string | undefined): boolean =>
     name === SUBAGENT_TOOL_V2 || name === "task" || name === "delegate" || name === "call_omo_agent"
 
@@ -178,7 +196,7 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
       if (key) toolInfo.set(key, { name: String(name), input: input ?? {} })
       return {
         type: "tool", tool: normName(String(name)), id: String(data.id), subagent_type: agentOf(input),
-        state: { status: "running", input: input ?? {}, metadata: {} },
+        state: { status: "running", input: input ?? {}, metadata: withResolvedSid(data, {}) },
       }
     }
     if (type === "session.tool.progress") {
@@ -188,11 +206,12 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
       if (!name) return undefined
       return {
         type: "tool", tool: normName(String(name)), id: String(data.id), subagent_type: agentOf(info?.input),
-        state: { status: "running", input: info?.input ?? {}, metadata: normalizeMeta(data.metadata) },
+        state: { status: "running", input: info?.input ?? {}, metadata: withResolvedSid(data, normalizeMeta(data.metadata)) },
       }
     }
     if (type === "session.tool.success" || type === "session.tool.failed") {
-      const meta = normalizeMeta(data.metadata)
+      const eventMeta = normalizeMeta(data.metadata)
+      const meta = withResolvedSid(data, eventMeta)
       // 取消导致的工具失败：metadata.status 是工具被打断时的状态（"running"）——不是真错误。
       // 忽略——最终状态由 execution.interrupted → settleOnIdle 裁定 cancelled
       // （否则 handlePartUpdated 的 error 分支会把 cancel_requested 覆盖成 error）
@@ -213,10 +232,19 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
       if (meta.sessionID === undefined && (finalInput.background === true || finalInput.run_in_background === true)) {
         return undefined
       }
+      // sid 来自本地库（事件没带）时以库里的 time_idle 为准：库里会话仍在运行
+      // 就不提前收尾，交给周期性 reconcile 按真实状态落定（无时间阈值猜测）。
+      let status: "completed" | "error" | "running" = type === "session.tool.failed" ? "error" : "completed"
+      if (meta.sessionID !== undefined && meta.sessionID !== eventMeta.sessionID) {
+        try {
+          const childInfo = dbIndex?.info(String(meta.sessionID))
+          if (childInfo && statusOfChild(childInfo) === undefined) status = "running"
+        } catch {}
+      }
       return {
         type: "tool", tool: normName(String(name ?? "task")), id: String(data.id), subagent_type: agentOf(finalInput),
         state: {
-          status: type === "session.tool.failed" ? "error" : "completed",
+          status,
           input: finalInput,
           metadata: meta,
         },
@@ -287,6 +315,11 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
     usage: {
       readSessionTokens: (sid: string): number | undefined => {
         if (!sid) return undefined
+        // 本地库优先：宿主数据层缺少该子会话缓存时也能给出用量。
+        try {
+          const dbTokens = dbIndex?.info(sid)?.tokens
+          if (dbTokens !== undefined) { rememberUsage(sid, { tokens: dbTokens }); return dbTokens }
+        } catch {}
         try {
           const msgs = context.data.session.message.list(sid)
           if (msgs) {
@@ -314,6 +347,10 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
       },
       readSessionCost: (sid: string): number | undefined => {
         if (!sid) return undefined
+        try {
+          const dbCost = dbIndex?.info(sid)?.cost
+          if (dbCost !== undefined) { rememberUsage(sid, { cost: dbCost }); return dbCost }
+        } catch {}
         try {
           const direct = context.data.session.cost(sid)
           if (typeof direct === "number" && direct > 0) { rememberUsage(sid, { cost: direct }); return direct }
@@ -344,6 +381,10 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
       },
       readSessionModel: (sid: string): string | undefined => {
         if (!sid) return undefined
+        try {
+          const dbModel = dbIndex?.info(sid)?.model
+          if (dbModel !== undefined) { rememberUsage(sid, { model: dbModel }); return dbModel }
+        } catch {}
         try {
           const msgs = context.data.session.message.list(sid)
           if (msgs) {
@@ -384,11 +425,19 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
       status: (sid) => {
         try {
           const st = context.data.session.status(sid)
-          // V2 的 "running" 等价 V1 的 "busy"（cancelEntry 检查 `st.type !== "busy"`——
-          // 不映射会跳过取消流程直接标记 done）
-          const type = st === "running" ? "busy" : st ?? ""
-          return { type }
-        } catch { return undefined }
+          if (st) {
+            // V2 的 "running" 等价 V1 的 "busy"（cancelEntry 检查 `st.type !== "busy"`——
+            // 不映射会跳过取消流程直接标记 done）
+            const type = st === "running" ? "busy" : st
+            return { type }
+          }
+        } catch {}
+        // 宿主没有该子会话的实时状态（未加载缓存）时用本地库终态兜底：
+        // time_idle 存在即已结束；不存在则不猜测（交给事件/扫描）。
+        try {
+          if (statusOfChild(dbIndex?.info(sid)) !== undefined) return { type: "idle" }
+        } catch {}
+        return undefined
       },
       messages: (sid) => { try { return normalizeMessages(sid) } catch { return undefined } },
       part: (messageID) => {
@@ -401,6 +450,13 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
           return []
         }
         return msg.content.map((p) => toV1Part(p as Record<string, any>))
+      },
+      resolveChild: (input) => {
+        try {
+          const sid = input.callId ? dbIndex?.resolveCall(input.parentId, input.callId) : undefined
+          if (sid) return sid
+          return dbIndex?.matchChild(input.parentId, input.agent, input.startedAt)
+        } catch { return undefined }
       },
     },
     event: {

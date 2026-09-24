@@ -17,7 +17,7 @@ await esbuild.build({
   format: "esm",
   platform: "node",
   bundle: true,
-  external: ["@opencode-ai/*", "@opentui/*", "solid-js"],
+  external: ["@opencode-ai/*", "@opentui/*", "solid-js", "bun:sqlite"],
   plugins: [solidPlugin({ solid: { moduleName: "@opentui/solid", generate: "universal" } })],
 })
 
@@ -30,6 +30,6 @@ await esbuild.build({
   format: "esm",
   platform: "node",
   bundle: true,
-  external: ["@opencode-ai/*", "@opentui/*", "solid-js"],
+  external: ["@opencode-ai/*", "@opentui/*", "solid-js", "bun:sqlite"],
   plugins: [solidPlugin({ solid: { moduleName: "@opentui/solid", generate: "universal" } })],
 })

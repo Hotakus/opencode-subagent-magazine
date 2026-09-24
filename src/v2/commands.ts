@@ -126,6 +126,7 @@ export function makeCommands(
           `${t("settings.showEntryTime")}: ${onOff(signals.showEntryTime())}`,
           `${t("settings.showEntryTokens")}: ${onOff(signals.showEntryTokens())}`,
           `${t("settings.timeFormat")}: ${TIME_FORMAT_SAMPLES[signals.timeFormat()]}`,
+          `${t("settings.dbSync")}: ${onOff(signals.dbSync())}`,
         ].join("\n")
         context.ui.toast.show({ title: t("settings.title"), message })
       },
@@ -195,6 +196,19 @@ export function makeCommands(
         signals.setShowEntryTokens(v)
         kv.set(SETTING_KEYS.showEntryTokens, v)
         api.ui.toast(`${t("settings.showEntryTokens")}: ${onOff(v)}`)
+      },
+    },
+    {
+      id: "opencode-subagent-magazine.subagent.db",
+      title: "SubAgent Magazine: Toggle Local DB",
+      description: "Enrich sub-agent entries from the local OpenCode database (V2)",
+      slash: { name: "subagent-db" },
+      palette: true,
+      run: () => {
+        const v = !signals.dbSync()
+        signals.setDbSync(v)
+        kv.set(SETTING_KEYS.dbSync, v)
+        api.ui.toast(`${t("settings.dbSync")}: ${onOff(v)}`)
       },
     },
     {

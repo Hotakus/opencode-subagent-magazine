@@ -738,25 +738,37 @@ export function SubAgentPanel(props: {
    *  纯 map 变换——是否持久化由调用方决定。 */
   const settleIdleEntries = (prev: Map<string, SubEntry>): Map<string, SubEntry> => {
     let changed = false
-    const settled: string[] = []
     const next = new Map(prev)
     for (const [id, entry] of next) {
-      if ((entry.status !== "running" && entry.status !== "cancel_requested") || !entry.sessionId) continue
+      if (entry.status !== "running" && entry.status !== "cancel_requested") continue
+      // 无链接条目：先用宿主/本地库按 call id 回填子会话 id；
+      // 回填不了就维持原状（不猜测、不设时间阈值）。
+      let sid = entry.sessionId
+      if (!sid) {
+        try {
+          const callId = String(entry.id).replace(/^tool:/, "")
+          sid = props.api.session.resolveChild?.({
+            parentId: props.sessionId, callId, agent: entry.agent, startedAt: entry.startedAt,
+          })
+        } catch {}
+        if (!sid) continue
+        next.set(id, { ...entry, sessionId: sid })
+        changed = true
+      }
       try {
-        const st = props.api.session.status(entry.sessionId)
+        const st = props.api.session.status(sid)
         if (!st || st.type !== "idle") continue
-        const tokens = props.api.usage.readSessionTokens(entry.sessionId)
-        const cost = props.api.usage.readSessionCost(entry.sessionId)
+        const tokens = props.api.usage.readSessionTokens(sid)
+        const cost = props.api.usage.readSessionCost(sid)
         const finalStatus: SubStatus = entry.status === "cancel_requested" && entry.abortAccepted
           ? "cancelled"
           : "done"
         next.set(id, {
-          ...entry, status: finalStatus, endedAt: Date.now(),
+          ...entry, sessionId: sid, status: finalStatus, endedAt: Date.now(),
           tokens: tokens ?? entry.tokens,
           cost: cost ?? entry.cost,
         })
         changed = true
-        settled.push(id)
       } catch {}
     }
     return changed ? next : prev
@@ -808,10 +820,16 @@ export function SubAgentPanel(props: {
               // TUI 数据层把子代理 metadata 放在 part 级；旧缓存
               // 形状可能嵌在 state 里。两处都读。
               const scanMeta = partMetadata(part, st)
-              const scanSubSid = scanMeta?.session_id !== undefined ? String(scanMeta.session_id)
+              let scanSubSid = scanMeta?.session_id !== undefined ? String(scanMeta.session_id)
                 : scanMeta?.sessionId !== undefined ? String(scanMeta.sessionId)
                 : scanMeta?.sessionID !== undefined ? String(scanMeta.sessionID)
                 : undefined
+              // 宿主缓存/历史缺少子会话链接时，用本地库按工具 call id 回填。
+              if (!scanSubSid) {
+                try {
+                  scanSubSid = props.api.session.resolveChild?.({ parentId: sid, callId: String(part.id) })
+                } catch {}
+              }
               const existingKey = findSubEntryKey(next, id, scanSubSid)
               const exists = existingKey ? next.get(existingKey) : undefined
 
@@ -871,9 +889,8 @@ export function SubAgentPanel(props: {
                   const msgTokens = (msg as any)?.tokens as Record<string, unknown> | undefined
                   if (msgTokens && (Number(msgTokens.input) > 0 || Number(msgTokens.output) > 0)) {
                     status = "done"  // LLM returned tokens → agent completed
-                  } else if (Date.now() - exists.startedAt > 30 * 60 * 1000) {
-                    status = "done"  // >30 min idle → assume completed
                   } else {
+                    // 无终态证据时不猜测：等本地库/事件回填子会话状态后由 reconcile 落定。
                     continue
                   }
                 } else {
@@ -1012,10 +1029,10 @@ export function SubAgentPanel(props: {
           // 饿死列表其余部分；每个 tick 只读取少数会话。
           const candidates: string[] = []
           for (const [id, entry] of next) {
-            if (!entry.sessionId) continue
             const running = entry.status === "running" || entry.status === "cancel_requested"
             const missing = entry.tokens === undefined || entry.cost === undefined || !validModel(entry.model)
-            if (!running && !missing) continue
+            // 无链接条目（含历史 done）也参与：先用宿主/本地库回填 sid，再补 usage。
+            if (entry.sessionId && !running && !missing) continue
             candidates.push(id)
           }
           if (candidates.length > 0) {
@@ -1023,14 +1040,25 @@ export function SubAgentPanel(props: {
             let budget = 4
             for (let k = 0; k < candidates.length && budget > 0; k++) {
               const id = candidates[(start + k) % candidates.length]
-              const entry = next.get(id)
-              if (!entry || !entry.sessionId) continue
+              let entry = next.get(id)
+              if (!entry) continue
+              if (!entry.sessionId) {
+                try {
+                  const callId = String(entry.id).replace(/^tool:/, "")
+                  const sid = props.api.session.resolveChild?.({
+                    parentId: props.sessionId, callId, agent: entry.agent, startedAt: entry.startedAt,
+                  })
+                  if (sid) { entry = { ...entry, sessionId: sid }; next.set(id, entry); changed = true }
+                } catch {}
+              }
+              if (!entry.sessionId) continue
+              const childSid = entry.sessionId
               // 只从子会话读取，绝不读父会话。较旧的子会话
               // 可能不在本地缓存中，此时它们仍属于
               // 本面板的 map，读取是安全的。
               let isChild = false
               try {
-                const s = props.api.session.get(entry.sessionId)
+                const s = props.api.session.get(childSid)
                 isChild = !s || s.parentID === props.sessionId
               } catch { isChild = true }
               if (!isChild) continue
@@ -1040,19 +1068,19 @@ export function SubAgentPanel(props: {
               let entryChanged = false
               const nextEntry: SubEntry = { ...entry }
               if (running || entry.tokens === undefined) {
-                const total = props.api.usage.readSessionTokens(entry.sessionId)
+                const total = props.api.usage.readSessionTokens(childSid)
                 if (total !== undefined && total !== entry.tokens) { nextEntry.tokens = total; entryChanged = true }
               }
               if (running || entry.cost === undefined) {
-                const cost = props.api.usage.readSessionCost(entry.sessionId)
+                const cost = props.api.usage.readSessionCost(childSid)
                 if (cost !== undefined && cost !== entry.cost) { nextEntry.cost = cost; entryChanged = true }
               }
               if (running || !validModel(entry.model)) {
-                const model = props.api.usage.readSessionModel(entry.sessionId)
+                const model = props.api.usage.readSessionModel(childSid)
                 if (model && model !== entry.model) { nextEntry.model = model; entryChanged = true }
               }
               if (running) {
-                const todo = props.api.usage.readSessionTodo(entry.sessionId)
+                const todo = props.api.usage.readSessionTodo(childSid)
                 if (todo !== undefined && (todo.total !== entry.todoTotal || todo.done !== entry.todoDone)) {
                   nextEntry.todoTotal = todo.total; nextEntry.todoDone = todo.done; entryChanged = true
                 }

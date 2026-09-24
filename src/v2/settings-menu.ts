@@ -49,6 +49,7 @@ async function runSettingsMenu(context: Context, api: PanelApi, signals: SharedS
         { title: t("settings.showEntryTime"), value: "time", description: onOff(signals.showEntryTime()), category },
         { title: t("settings.timeFormat"), value: "timefmt", description: TIME_FORMAT_SAMPLES[signals.timeFormat()], category },
         { title: t("settings.showEntryTokens"), value: "tokens", description: onOff(signals.showEntryTokens()), category },
+        { title: t("settings.dbSync"), value: "dbsync", description: onOff(signals.dbSync()), category },
         { title: t("settings.close"), value: "close" },
       ],
     })
@@ -214,6 +215,23 @@ async function runSettingsMenu(context: Context, api: PanelApi, signals: SharedS
         signals.setShowEntryTokens(picked)
         kv.set(SETTING_KEYS.showEntryTokens, picked)
         toast(t("settings.showEntryTokens"), onOff(picked))
+      }
+    }
+
+    // ── 本地数据库补全 ──
+    if (choice === "dbsync") {
+      const picked = await context.ui.dialog.select<boolean>({
+        title: t("settings.dbSync"),
+        options: [
+          { title: t("settings.on"), value: true },
+          { title: t("settings.off"), value: false },
+        ],
+        current: signals.dbSync(),
+      })
+      if (picked !== undefined) {
+        signals.setDbSync(picked)
+        kv.set(SETTING_KEYS.dbSync, picked)
+        toast(t("settings.dbSync"), onOff(picked))
       }
     }
 

@@ -79,8 +79,11 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
   const [timeFormat, setTimeFormat] = createSignal<TimeFormat>(
     (TIME_FORMATS as readonly string[]).includes(storedTimeFormat) ? (storedTimeFormat as TimeFormat) : "short"
   )
+  const [dbSync, setDbSync] = createSignal<boolean>(
+    (api.kv.get(`${KV_PREFIX}.db_sync`, true) as boolean) !== false
+  )
 
-  const signals: SharedSignals = { lang, setLang, maxEntries, setMaxEntries, sortOrder, setSortOrder, scrollMode, setScrollMode, borderVisible, setBorderVisible, showEntryCost, setShowEntryCost, showEntryTime, setShowEntryTime, showEntryTokens, setShowEntryTokens, timeFormat, setTimeFormat, sessionId: "" }
+  const signals: SharedSignals = { lang, setLang, maxEntries, setMaxEntries, sortOrder, setSortOrder, scrollMode, setScrollMode, borderVisible, setBorderVisible, showEntryCost, setShowEntryCost, showEntryTime, setShowEntryTime, showEntryTokens, setShowEntryTokens, timeFormat, setTimeFormat, dbSync, setDbSync, sessionId: "" }
 
   // ── V1 PanelApi adapter: wraps the V1 host API into the shared panel contract ──
   const v1Api: PanelApi = {

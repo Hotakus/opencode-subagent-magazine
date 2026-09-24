@@ -29,6 +29,7 @@ export const SETTING_KEYS = {
   showEntryTime: `${KV_PREFIX}.show_entry_time`,
   showEntryTokens: `${KV_PREFIX}.show_entry_tokens`,
   timeFormat: `${KV_PREFIX}.time_format`,
+  dbSync: `${KV_PREFIX}.db_sync`,
 } as const
 
 export function loadSessionData(kv: KVApi): Record<string, SessionRecord> {

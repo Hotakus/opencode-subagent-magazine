@@ -95,6 +95,9 @@ const mod: PluginModule & { server: () => Promise<Record<string, never>> } = {
     const [timeFormatSignal, setTimeFormat] = createSignal<TimeFormat>(
       (TIME_FORMATS as readonly string[]).includes(storedTimeFormat) ? (storedTimeFormat as TimeFormat) : "short",
     )
+    const [dbSyncSignal, setDbSync] = createSignal<boolean>(
+      (api.kv.get(SETTING_KEYS.dbSync, true) as boolean) !== false,
+    )
     lang = langSignal
     maxEntries = maxSignal
     sortOrder = orderSignal
@@ -106,6 +109,7 @@ const mod: PluginModule & { server: () => Promise<Record<string, never>> } = {
       showEntryTime: showEntryTimeSignal, setShowEntryTime,
       showEntryTokens: showEntryTokensSignal, setShowEntryTokens,
       timeFormat: timeFormatSignal, setTimeFormat,
+      dbSync: dbSyncSignal, setDbSync,
       sessionId: "",
     }
 
