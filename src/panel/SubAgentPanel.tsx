@@ -43,6 +43,11 @@ function partMetadata(
   return stateMeta && Object.keys(stateMeta).length > 0 ? stateMeta : undefined
 }
 
+/** model 字段的有效值——历史 KV 里可能混入 "[object Object]" 这类序列化垃圾。 */
+function validModel(model: string | undefined): model is string {
+  return typeof model === "string" && model.length > 0 && model !== "[object Object]"
+}
+
 export function SubAgentPanel(props: {
   api: PanelApi
   theme: Record<string, unknown>
@@ -836,7 +841,7 @@ export function SubAgentPanel(props: {
                 (exists!.sessionId === undefined ||
                   exists!.tokens === undefined ||
                   exists!.cost === undefined ||
-                  exists!.model === undefined)
+                  !validModel(exists!.model))
               if (settled && !needsRepair) continue
 
               let status: SubStatus = "running"
@@ -900,7 +905,7 @@ export function SubAgentPanel(props: {
                 // Preserve existing values (from handleSessionEnd / KV) — scan must not overwrite
                 tokens: exists?.tokens ?? tokens,
                 cost: exists?.cost ?? cost,
-                model: exists?.model ?? model,
+                model: validModel(exists?.model) ? exists!.model : model,
                 sessionId: exists?.sessionId ?? scanSubSid,
                 status,
                 startedAt: exists?.startedAt || Date.now(),
@@ -1009,7 +1014,7 @@ export function SubAgentPanel(props: {
           for (const [id, entry] of next) {
             if (!entry.sessionId) continue
             const running = entry.status === "running" || entry.status === "cancel_requested"
-            const missing = entry.tokens === undefined || entry.cost === undefined || entry.model === undefined
+            const missing = entry.tokens === undefined || entry.cost === undefined || !validModel(entry.model)
             if (!running && !missing) continue
             candidates.push(id)
           }
@@ -1042,7 +1047,7 @@ export function SubAgentPanel(props: {
                 const cost = props.api.usage.readSessionCost(entry.sessionId)
                 if (cost !== undefined && cost !== entry.cost) { nextEntry.cost = cost; entryChanged = true }
               }
-              if (running || entry.model === undefined) {
+              if (running || !validModel(entry.model)) {
                 const model = props.api.usage.readSessionModel(entry.sessionId)
                 if (model && model !== entry.model) { nextEntry.model = model; entryChanged = true }
               }
@@ -1598,7 +1603,7 @@ export function SubAgentPanel(props: {
                         )
                       })()}
                     </Show>
-                    <Show when={entry.model}>
+                    <Show when={validModel(entry.model) ? entry.model : undefined}>
                       <text>
                         {"  "}
                         <span style={{ fg: pal().primary }}>{t("model.label")}: </span>

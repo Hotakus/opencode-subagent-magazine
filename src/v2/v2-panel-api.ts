@@ -15,6 +15,16 @@ function normalizeMeta(meta: unknown): Record<string, unknown> {
   return m
 }
 
+/** 从 host 的 model 字段（字符串或 { id } 对象）提取模型 id。 */
+function modelIdOf(value: unknown): string | undefined {
+  if (typeof value === "string") return value
+  if (value && typeof value === "object") {
+    const id = (value as { id?: unknown }).id
+    if (id !== undefined) return String(id)
+  }
+  return undefined
+}
+
 /** V2 content part → V1 Part 形状（scan 的 part() 消费）。 */
 function toV1Part(p: Record<string, any>): Record<string, any> {
   if (p.type === "tool") {
@@ -340,15 +350,14 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
             for (let i = msgs.length - 1; i >= 0; i--) {
               const m = msgs[i] as Record<string, any>
               if (m.type !== "assistant") continue
-              const model = m.model as { id?: string } | string | undefined
-              const id = typeof model === "string" ? model : model?.id
-              if (id) { rememberUsage(sid, { model: String(id) }); return String(id) }
+              const id = modelIdOf(m.model)
+              if (id) { rememberUsage(sid, { model: id }); return id }
             }
           }
-          const session = context.data.session.get(sid)
-          if (session?.model) { rememberUsage(sid, { model: String(session.model) }); return String(session.model) }
-          const listed = listedSession(sid)
-          if (listed?.model) { rememberUsage(sid, { model: String(listed.model) }); return String(listed.model) }
+          const sessionModel = modelIdOf(context.data.session.get(sid)?.model)
+          if (sessionModel) { rememberUsage(sid, { model: sessionModel }); return sessionModel }
+          const listedModel = modelIdOf(listedSession(sid)?.model)
+          if (listedModel) { rememberUsage(sid, { model: listedModel }); return listedModel }
           const cached = cachedUsage(sid)?.model
           if (cached !== undefined) return cached
           requestMessageSync(sid)
