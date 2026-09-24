@@ -448,6 +448,9 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
           return dbIndex?.matchChild(input.parentId, input.agent, input.startedAt)
         } catch { return undefined }
       },
+      listChildren: (parentId) => {
+        try { return dbIndex?.enabled() ? dbIndex.children(parentId) : undefined } catch { return undefined }
+      },
     },
     event: {
       on: (type: PanelEventType, cb: (e: PanelEvent) => void) => {

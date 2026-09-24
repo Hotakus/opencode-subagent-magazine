@@ -36,6 +36,8 @@ export interface SessionDbIndex {
   matchChild(parentId: string, agent: string | undefined, startedAt: number | undefined): string | undefined
   /** 子会话汇总（model/tokens/cost/time_idle）。 */
   info(sid: string): ChildSessionInfo | undefined
+  /** 该会话派生的子会话（spawn），用于补全没有工具条目的衍生会话。 */
+  children(parentId: string): ChildSessionInfo[] | undefined
 }
 
 type SqlRow = Record<string, unknown>
@@ -141,7 +143,12 @@ const ASSISTANT_COST_SQL = `
   FROM session_message WHERE session_id = ? AND type = 'assistant'`
 
 const CHILDREN_SQL = `
-  SELECT id, agent, time_created FROM session_v2 WHERE parent_id = ? ORDER BY time_created`
+  SELECT id, agent, title, model, cost,
+         tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write,
+         time_created, time_idle, idle_outcome
+  FROM session_v2
+  WHERE parent_id = ? AND (fork_session_id IS NULL OR fork_session_id = '')
+  ORDER BY time_created`
 
 const num = (v: unknown): number | undefined => {
   const n = Number(v)
@@ -270,5 +277,40 @@ export function createSessionDbIndex(enabled: () => boolean): SessionDbIndex | u
     return result
   }
 
-  return { enabled: ready, resolveCall, matchChild, info }
+  const children = (parentId: string): ChildSessionInfo[] | undefined => {
+    if (!ready() || !parentId) return undefined
+    const now = Date.now()
+    let cached = childrenCache.get(parentId)
+    if (!cached || now - cached.at > CALL_MAP_TTL_MS) {
+      let list: SqlRow[] = []
+      try { list = db!.query(CHILDREN_SQL).all(parentId) } catch {}
+      cached = { list, at: now }
+      childrenCache.set(parentId, cached)
+    }
+    const out: ChildSessionInfo[] = []
+    for (const row of cached.list) {
+      const sid = str(row.id)
+      if (!sid) continue
+      const full = info(sid)
+      if (full) { out.push(full); continue }
+      // info 缓存未命中时不丢字段：用列表行自身的汇总兜底。
+      const agg = (num(row.tokens_input) || 0) + (num(row.tokens_output) || 0) + (num(row.tokens_reasoning) || 0) +
+        (num(row.tokens_cache_read) || 0) + (num(row.tokens_cache_write) || 0)
+      out.push({
+        id: sid,
+        parentId,
+        agent: str(row.agent),
+        title: str(row.title),
+        model: modelIdOf(row.model),
+        cost: num(row.cost),
+        tokens: agg > 0 ? agg : undefined,
+        timeCreated: num(row.time_created),
+        timeIdle: num(row.time_idle),
+        idleOutcome: str(row.idle_outcome),
+      })
+    }
+    return out
+  }
+
+  return { enabled: ready, resolveCall, matchChild, info, children }
 }

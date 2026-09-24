@@ -15,7 +15,7 @@ import { PLUGIN_VERSION } from "../_version"
 import { copyText } from "../clipboard"
 import { createT } from "../i18n"
 import type { Lang, SortOrder, ScrollMode, SubEntry, SubStatus, SessionRecord, TimeFormat } from "../core/types"
-import { SUBAGENT_TOOLS } from "../core/types"
+import { SUBAGENT_TOOLS, isBackgroundInput } from "../core/types"
 import { visualWidth, truncate, fmtDuration, fmtTokens, safeErrorMsg } from "../core/format"
 import { rgb, desaturateTo, dimColor, FALLBACK, MAX_SAT } from "../core/color"
 import { KV_PREFIX, updateSessionData } from "../core/kv"
@@ -417,7 +417,7 @@ export function SubAgentPanel(props: {
       const subSid = part.sessionID !== undefined ? String(part.sessionID) : undefined
       const partModel = part.model as { modelID?: string } | undefined
       const modelId = partModel?.modelID ? String(partModel.modelID) : undefined
-      upsertEntry({ id, title, agent, prompt, sessionId: subSid, status: "running", model: modelId })
+      upsertEntry({ id, title, agent, prompt, sessionId: subSid, status: "running", model: modelId, origin: "sub" })
     }
 
     // ToolPart
@@ -451,6 +451,8 @@ export function SubAgentPanel(props: {
             prompt: existing.prompt,
             sessionId: existing.sessionId ?? errorSid,
             status: "error",
+            origin: "tool",
+            background: isBackgroundInput(st?.input),
           })
         }
         return
@@ -463,7 +465,7 @@ export function SubAgentPanel(props: {
       // Background tasks: tool completion ≠ agent completion — keep running until session.idle
       // Only keep running if state metadata confirms a child session was spawned;
       // otherwise (failed spawn, invalid agent) mark as done so the entry isn't stuck forever.
-      if ((input?.run_in_background === true || input?.background === true) && status === "done") {
+      if (isBackgroundInput(input) && status === "done") {
         const stMetaCheck = partMetadata(part as Record<string, any>, st)
         const hasChild = stMetaCheck?.session_id !== undefined || stMetaCheck?.sessionId !== undefined
         if (hasChild) status = "running"
@@ -481,7 +483,7 @@ export function SubAgentPanel(props: {
       const subSid = stMeta?.session_id !== undefined ? String(stMeta.session_id)
         : stMeta?.sessionId !== undefined ? String(stMeta.sessionId)
         : undefined
-      upsertEntry({ id, title, agent, prompt, sessionId: subSid, status })
+      upsertEntry({ id, title, agent, prompt, sessionId: subSid, status, origin: "tool", background: isBackgroundInput(input) })
     }
   }
 
@@ -869,7 +871,7 @@ export function SubAgentPanel(props: {
               if (rawStatus === "completed") status = "done"
               // Background tasks: tool completion ≠ agent completion — keep running until session.idle
               // 仅在 metadata 确认已派生子会话时保持 running。
-              if ((scanInput?.run_in_background === true || scanInput?.background === true) && status === "done") {
+              if (isBackgroundInput(scanInput) && status === "done") {
                 if (scanSubSid !== undefined) status = "running"
               }
               // 子会话存活判定：工具调用已完成但子会话仍 busy，
@@ -930,6 +932,8 @@ export function SubAgentPanel(props: {
                 status,
                 startedAt: exists?.startedAt || Date.now(),
                 endedAt: exists?.endedAt ?? (status === "done" ? Date.now() : undefined),
+                origin: "tool",
+                background: isBackgroundInput(scanInput) || exists?.background === true,
               })
               if (entryKey !== id) next.delete(id)
             }
@@ -987,7 +991,7 @@ export function SubAgentPanel(props: {
           // 非后台 tool 已完成、条目却仍停在 running：补一次 scan 收尾
           // （success 事件可能因缺少 metadata 被适配层丢弃）。
           const input = st?.input as Record<string, unknown> | undefined
-          const isBackground = input?.background === true || input?.run_in_background === true
+          const isBackground = isBackgroundInput(input)
           const stillRunning = entry.status === "running" || entry.status === "cancel_requested"
           if (rawStatus === "completed" && !isBackground && stillRunning) return true
         }
@@ -1027,6 +1031,44 @@ export function SubAgentPanel(props: {
         setEntryMapRaw((prev) => {
           let changed = false
           const next = new Map(prev)
+          // 每 ~2s 从本地库同步衍生会话（spawn）：没有对应工具条目的
+          // 子会话补成 sub: 条目（标题/agent/用量/终态都来自数据库）。
+          if (tick % 4 === 0) {
+            try {
+              const children = props.api.session.listChildren?.(props.sessionId)
+              if (children) {
+                const linked = new Set<string>()
+                for (const e of next.values()) if (e.sessionId) linked.add(e.sessionId)
+                const { parentSid, isChild } = resolveParent(props.sessionId)
+                const rec = loadSessionData()[parentSid]
+                const cleared = new Set<string>(isChild ? rec?.children?.[props.sessionId]?.clearedIds : rec?.clearedIds)
+                for (const child of children) {
+                  if (!child.id || linked.has(child.id)) continue
+                  const id = `sub:${child.id}`
+                  if (cleared.has(id)) continue
+                  const finished = child.timeIdle != null
+                  const status: SubStatus = finished
+                    ? (child.idleOutcome === "interrupted" ? "cancelled" : "done")
+                    : "running"
+                  next.set(id, {
+                    id,
+                    title: child.title ?? child.agent ?? "",
+                    agent: child.agent ?? "?",
+                    prompt: "",
+                    status,
+                    sessionId: child.id,
+                    startedAt: child.timeCreated ?? Date.now(),
+                    endedAt: finished ? child.timeIdle : undefined,
+                    tokens: child.tokens,
+                    cost: child.cost,
+                    model: child.model,
+                    origin: "sub",
+                  })
+                  changed = true
+                }
+              }
+            } catch {}
+          }
           // 候选：仍缺 usage 数据的条目。以 round-robin 遍历，
           // 避免一串读不到数据的会话（如 free-model 子会话）
           // 饿死列表其余部分；每个 tick 只读取少数会话。
@@ -1535,6 +1577,10 @@ export function SubAgentPanel(props: {
                 !isExpanded() && props.showEntryTime() && (elapsed() >= 2000 || entry.endedAt !== undefined)
                   ? fmtDuration(elapsed(), isActiveRunning, props.timeFormat())
                   : ""
+              // 来源标记：⇢ = 后台衍生（工具输入 background），↳ = 衍生会话（spawn）。
+              const originMark = () =>
+                entry.origin === "sub" ? "\u21b3" : entry.background === true ? "\u21e2" : ""
+              const originW = () => (originMark() ? 2 : 0)
               const suffixW = () => {
                 let w = 0
                 const t = timeText()
@@ -1545,7 +1591,7 @@ export function SubAgentPanel(props: {
                 if (c) w += visualWidth(c)
                 return w
               }
-              const labelAvail = () => Math.max(6, panelWidth() - gutter() - LEFT_PAD - suffixW())
+              const labelAvail = () => Math.max(6, panelWidth() - gutter() - LEFT_PAD - originW() - suffixW())
               const labelText = () => {
                 const max = labelAvail()
                 const text = entry.title || entry.agent
@@ -1564,6 +1610,7 @@ export function SubAgentPanel(props: {
                     {" "}
                     <span style={{ fg: statusColor() }}>{statusDot()}</span>
                     {" "}
+                    {originMark() ? <span style={{ fg: pal().muted }}>{originMark() + " "}</span> : null}
                     <span style={{ fg: pal().text }}>{labelText()}</span>
                     {timeText() ? (
                       <>
@@ -1586,6 +1633,15 @@ export function SubAgentPanel(props: {
                       <span style={{ fg: pal().primary }}>{t("agent.label")}: </span>
                       <span style={{ fg: pal().muted }}>{" ".repeat(expandedPad(t("agent.label")))}</span>
                       <span style={{ fg: pal().muted }}>{entry.agent}</span>
+                    </text>
+                    <text>
+                      {"  "}
+                      <span style={{ fg: pal().primary }}>{t("origin.label")}: </span>
+                      <span style={{ fg: pal().muted }}>{" ".repeat(expandedPad(t("origin.label")))}</span>
+                      <span style={{ fg: pal().muted }}>
+                        {entry.origin === "sub" ? t("origin.sub") : t("origin.tool")}
+                        {entry.background === true ? ` (${t("origin.background")})` : ""}
+                      </span>
                     </text>
                     <text>
                       {"  "}
