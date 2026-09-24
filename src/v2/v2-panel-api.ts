@@ -423,9 +423,11 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
           }
         } catch {}
         // 宿主没有该子会话的实时状态（未加载缓存）时用本地库终态兜底：
-        // time_idle 存在即已结束；不存在则不猜测（交给事件/扫描）。
+        // time_idle 存在且没有恢复活动即已结束；仍在运行则回报 busy。
         try {
-          if (statusOfChild(dbIndex?.info(sid)) !== undefined) return { type: "idle" }
+          const info = dbIndex?.info(sid)
+          if (info?.active === true) return { type: "busy" }
+          if (statusOfChild(info) !== undefined) return { type: "idle" }
         } catch {}
         return undefined
       },

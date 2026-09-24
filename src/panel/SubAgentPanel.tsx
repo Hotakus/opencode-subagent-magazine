@@ -1046,7 +1046,7 @@ export function SubAgentPanel(props: {
                   if (!child.id || linked.has(child.id)) continue
                   const id = `sub:${child.id}`
                   if (cleared.has(id)) continue
-                  const finished = child.timeIdle != null
+                  const finished = child.timeIdle != null && child.active !== true
                   const status: SubStatus = finished
                     ? (child.idleOutcome === "interrupted" ? "cancelled" : "done")
                     : "running"
@@ -1068,6 +1068,19 @@ export function SubAgentPanel(props: {
                 }
               }
             } catch {}
+            // 恢复运行：终态条目若子会话被 resume（宿主或本地库回报 busy），
+            // 回到 running，等下一次真实 idle 再落定。
+            for (const [id, entry] of next) {
+              if (entry.status !== "done" && entry.status !== "error") continue
+              const sid = entry.sessionId
+              if (!sid) continue
+              try {
+                if (props.api.session.status(sid)?.type === "busy") {
+                  next.set(id, { ...entry, status: "running", endedAt: undefined })
+                  changed = true
+                }
+              } catch {}
+            }
           }
           // 候选：仍缺 usage 数据的条目。以 round-robin 遍历，
           // 避免一串读不到数据的会话（如 free-model 子会话）

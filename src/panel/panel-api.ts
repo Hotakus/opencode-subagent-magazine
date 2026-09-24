@@ -21,6 +21,8 @@ export interface ChildSessionLike {
   timeCreated?: number
   timeIdle?: number
   idleOutcome?: string
+  /** Still running: last message is newer than time_idle (resume keeps the old value). */
+  active?: boolean
 }
 
 export interface SessionStatusLike {
