@@ -45,6 +45,7 @@ function PluginRoot(props: {
       showEntryTime={props.signals.showEntryTime}
       showEntryTokens={props.signals.showEntryTokens}
       timeFormat={props.signals.timeFormat}
+      showOrigin={props.signals.showOrigin}
       sessionId={props.sessionID}
     />
   )
@@ -95,6 +96,9 @@ const mod: PluginModule & { server: () => Promise<Record<string, never>> } = {
     const [timeFormatSignal, setTimeFormat] = createSignal<TimeFormat>(
       (TIME_FORMATS as readonly string[]).includes(storedTimeFormat) ? (storedTimeFormat as TimeFormat) : "short",
     )
+    const [showOriginSignal, setShowOrigin] = createSignal<boolean>(
+      (api.kv.get(SETTING_KEYS.showOrigin, false) as boolean) === true,
+    )
     const [dbSyncSignal, setDbSync] = createSignal<boolean>(
       (api.kv.get(SETTING_KEYS.dbSync, true) as boolean) !== false,
     )
@@ -109,6 +113,7 @@ const mod: PluginModule & { server: () => Promise<Record<string, never>> } = {
       showEntryTime: showEntryTimeSignal, setShowEntryTime,
       showEntryTokens: showEntryTokensSignal, setShowEntryTokens,
       timeFormat: timeFormatSignal, setTimeFormat,
+      showOrigin: showOriginSignal, setShowOrigin,
       dbSync: dbSyncSignal, setDbSync,
       sessionId: "",
     }

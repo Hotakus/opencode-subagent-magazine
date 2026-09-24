@@ -10,6 +10,21 @@ export interface SessionLike {
   cost?: number
 }
 
+/** Spawned child session summary (V2 reads it from the local database). */
+export interface ChildSessionLike {
+  id: string
+  agent?: string
+  title?: string
+  model?: string
+  cost?: number
+  tokens?: number
+  timeCreated?: number
+  timeIdle?: number
+  idleOutcome?: string
+  /** Still running: last message is newer than time_idle (resume keeps the old value). */
+  active?: boolean
+}
+
 export interface SessionStatusLike {
   type: string
 }
@@ -59,6 +74,8 @@ export interface PanelApi {
       agent?: string
       startedAt?: number
     }): string | undefined
+    /** Optional host-side listing of spawned child sessions. */
+    listChildren?(parentId: string): ChildSessionLike[] | undefined
   }
   event: {
     on(type: PanelEventType, cb: (e: PanelEvent) => void): () => void

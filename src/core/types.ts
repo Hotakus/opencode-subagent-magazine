@@ -20,6 +20,10 @@ export interface SubEntry {
   cancelRequestedAt?: number
   abortAccepted?: boolean
   cancelReason?: "manual"
+  /** 来源：工具调用条目 / 衍生会话条目（spawn）。 */
+  origin?: "tool" | "sub"
+  /** 工具输入带 background/run_in_background（后台衍生会话）。 */
+  background?: boolean
 }
 
 export type Lang = LangCode
@@ -30,6 +34,13 @@ export type TimeFormat = "decimal" | "short" | "clock" | "compact" | "seconds"
 
 /** OpenCode built-in tool names that spawn sub-agents or delegate tasks. */
 export const SUBAGENT_TOOLS = new Set(["task", "subagent", "delegate", "call_omo_agent"])
+
+/** 工具输入是否声明后台执行（V1/V2 两种字段名）。 */
+export function isBackgroundInput(input: unknown): boolean {
+  if (!input || typeof input !== "object") return false
+  const i = input as Record<string, unknown>
+  return i.background === true || i.run_in_background === true
+}
 
 export interface ChildRecord {
   scroll: number
@@ -66,6 +77,8 @@ export interface SharedSignals {
   setShowEntryTokens: (v: boolean) => void
   timeFormat: () => TimeFormat
   setTimeFormat: (f: TimeFormat) => void
+  showOrigin: () => boolean
+  setShowOrigin: (v: boolean) => void
   dbSync: () => boolean
   setDbSync: (v: boolean) => void
   sessionId: string

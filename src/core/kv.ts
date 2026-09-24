@@ -29,6 +29,7 @@ export const SETTING_KEYS = {
   showEntryTime: `${KV_PREFIX}.show_entry_time`,
   showEntryTokens: `${KV_PREFIX}.show_entry_tokens`,
   timeFormat: `${KV_PREFIX}.time_format`,
+  showOrigin: `${KV_PREFIX}.show_origin`,
   dbSync: `${KV_PREFIX}.db_sync`,
 } as const
 

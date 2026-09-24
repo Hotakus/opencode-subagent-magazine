@@ -40,6 +40,7 @@ function createSidebarSlot(api: TuiPluginApi, panelApi: PanelApi, sig: SharedSig
             showEntryTime={sig.showEntryTime}
             showEntryTokens={sig.showEntryTokens}
             timeFormat={sig.timeFormat}
+            showOrigin={sig.showOrigin}
             sessionId={input.session_id}
           />
         )
@@ -79,11 +80,14 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
   const [timeFormat, setTimeFormat] = createSignal<TimeFormat>(
     (TIME_FORMATS as readonly string[]).includes(storedTimeFormat) ? (storedTimeFormat as TimeFormat) : "short"
   )
+  const [showOrigin, setShowOrigin] = createSignal<boolean>(
+    (api.kv.get(`${KV_PREFIX}.show_origin`, false) as boolean) === true
+  )
   const [dbSync, setDbSync] = createSignal<boolean>(
     (api.kv.get(`${KV_PREFIX}.db_sync`, true) as boolean) !== false
   )
 
-  const signals: SharedSignals = { lang, setLang, maxEntries, setMaxEntries, sortOrder, setSortOrder, scrollMode, setScrollMode, borderVisible, setBorderVisible, showEntryCost, setShowEntryCost, showEntryTime, setShowEntryTime, showEntryTokens, setShowEntryTokens, timeFormat, setTimeFormat, dbSync, setDbSync, sessionId: "" }
+  const signals: SharedSignals = { lang, setLang, maxEntries, setMaxEntries, sortOrder, setSortOrder, scrollMode, setScrollMode, borderVisible, setBorderVisible, showEntryCost, setShowEntryCost, showEntryTime, setShowEntryTime, showEntryTokens, setShowEntryTokens, timeFormat, setTimeFormat, showOrigin, setShowOrigin, dbSync, setDbSync, sessionId: "" }
 
   // ── V1 PanelApi adapter: wraps the V1 host API into the shared panel contract ──
   const v1Api: PanelApi = {
@@ -551,6 +555,22 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             }}
           />
         ))
+      },
+    },
+    {
+      title: "SubAgent Magazine: Origin Indicators",
+      value: "subagent-origin",
+      description: "Show or hide origin markers (⇢/↳) in the sidebar list",
+      slash: { name: "subagent-origin" },
+      onSelect: (dialog) => {
+        const t = createT(() => signals.lang())
+        const cur = Boolean(api.kv.get(`${KV_PREFIX}.show_origin`, false))
+        api.kv.set(`${KV_PREFIX}.show_origin`, !cur)
+        signals.setShowOrigin(!cur)
+        api.ui.toast({
+          message: `${t("settings.showOrigin")}: ${!cur ? t("settings.on") : t("settings.off")}`,
+        })
+        dialog?.clear()
       },
     },
   ])

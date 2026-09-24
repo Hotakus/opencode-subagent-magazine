@@ -25,6 +25,8 @@ export interface ChildSessionInfo {
   timeCreated?: number
   timeIdle?: number
   idleOutcome?: string
+  /** 仍在运行：最后一条消息晚于 time_idle（会话被恢复时 time_idle 不会被清空）。 */
+  active?: boolean
 }
 
 export interface SessionDbIndex {
@@ -36,6 +38,8 @@ export interface SessionDbIndex {
   matchChild(parentId: string, agent: string | undefined, startedAt: number | undefined): string | undefined
   /** 子会话汇总（model/tokens/cost/time_idle）。 */
   info(sid: string): ChildSessionInfo | undefined
+  /** 该会话派生的子会话（spawn），用于补全没有工具条目的衍生会话。 */
+  children(parentId: string): ChildSessionInfo[] | undefined
 }
 
 type SqlRow = Record<string, unknown>
@@ -89,10 +93,28 @@ export function contextTokens(tokens: unknown): number | undefined {
   return sum > 0 ? sum : undefined
 }
 
-/** 子会话终态：time_idle 存在才算结束；interrupted 视为取消。
+/** 子会话是否仍在运行。
+ *  恢复过的会话会保留旧的 time_idle（host 不清空），因此以
+ *  「最后一条消息是否晚于 time_idle」为准；最后一条是 idle
+ *  消息则视为已停止。 */
+export function isSessionActive(input: {
+  timeIdle?: number
+  lastMessageType?: string
+  lastMessageAt?: number
+}): boolean {
+  const { timeIdle, lastMessageType, lastMessageAt } = input
+  if (lastMessageType === "idle") return false
+  if (lastMessageAt === undefined) return false
+  if (timeIdle === undefined) return true
+  return lastMessageAt > timeIdle
+}
+
+/** 子会话终态：time_idle 存在且没有恢复活动才算结束；interrupted 视为取消。
  *  没有 time_idle 时不作判断（交给宿主实时状态）——避免时间阈值猜测。 */
 export function statusOfChild(info: ChildSessionInfo | undefined): "done" | "cancelled" | undefined {
-  if (!info || info.timeIdle == null) return undefined
+  if (!info) return undefined
+  if (info.active === true) return undefined
+  if (info.timeIdle == null) return undefined
   return info.idleOutcome === "interrupted" ? "cancelled" : "done"
 }
 
@@ -136,12 +158,21 @@ const LAST_ASSISTANT_SQL = `
   WHERE session_id = ? AND type = 'assistant' AND json_extract(data, '$.tokens.output') > 0
   ORDER BY seq DESC LIMIT 1`
 
+const LAST_MESSAGE_SQL = `
+  SELECT type, COALESCE(time_updated, time_created) AS at
+  FROM session_message WHERE session_id = ? ORDER BY seq DESC LIMIT 1`
+
 const ASSISTANT_COST_SQL = `
   SELECT COUNT(*) AS n, SUM(COALESCE(json_extract(data, '$.cost'), 0)) AS total
   FROM session_message WHERE session_id = ? AND type = 'assistant'`
 
 const CHILDREN_SQL = `
-  SELECT id, agent, time_created FROM session_v2 WHERE parent_id = ? ORDER BY time_created`
+  SELECT id, agent, title, model, cost,
+         tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write,
+         time_created, time_idle, idle_outcome
+  FROM session_v2
+  WHERE parent_id = ? AND (fork_session_id IS NULL OR fork_session_id = '')
+  ORDER BY time_created`
 
 const num = (v: unknown): number | undefined => {
   const n = Number(v)
@@ -236,6 +267,7 @@ export function createSessionDbIndex(enabled: () => boolean): SessionDbIndex | u
       const row = db!.query(CHILD_INFO_SQL).get(sid)
       if (row) {
         const last = db!.query(LAST_ASSISTANT_SQL).get(sid)
+        const lastMsg = db!.query(LAST_MESSAGE_SQL).get(sid)
         let tokens = contextTokens(last ? {
           input: last.input, output: last.output, reasoning: last.reasoning,
           cache: { read: last.cache_read, write: last.cache_write },
@@ -263,6 +295,11 @@ export function createSessionDbIndex(enabled: () => boolean): SessionDbIndex | u
           timeCreated: num(row.time_created),
           timeIdle: num(row.time_idle),
           idleOutcome: str(row.idle_outcome),
+          active: isSessionActive({
+            timeIdle: num(row.time_idle),
+            lastMessageType: str(lastMsg?.type),
+            lastMessageAt: num(lastMsg?.at),
+          }),
         }
       }
     } catch { result = undefined }
@@ -270,5 +307,40 @@ export function createSessionDbIndex(enabled: () => boolean): SessionDbIndex | u
     return result
   }
 
-  return { enabled: ready, resolveCall, matchChild, info }
+  const children = (parentId: string): ChildSessionInfo[] | undefined => {
+    if (!ready() || !parentId) return undefined
+    const now = Date.now()
+    let cached = childrenCache.get(parentId)
+    if (!cached || now - cached.at > CALL_MAP_TTL_MS) {
+      let list: SqlRow[] = []
+      try { list = db!.query(CHILDREN_SQL).all(parentId) } catch {}
+      cached = { list, at: now }
+      childrenCache.set(parentId, cached)
+    }
+    const out: ChildSessionInfo[] = []
+    for (const row of cached.list) {
+      const sid = str(row.id)
+      if (!sid) continue
+      const full = info(sid)
+      if (full) { out.push(full); continue }
+      // info 缓存未命中时不丢字段：用列表行自身的汇总兜底。
+      const agg = (num(row.tokens_input) || 0) + (num(row.tokens_output) || 0) + (num(row.tokens_reasoning) || 0) +
+        (num(row.tokens_cache_read) || 0) + (num(row.tokens_cache_write) || 0)
+      out.push({
+        id: sid,
+        parentId,
+        agent: str(row.agent),
+        title: str(row.title),
+        model: modelIdOf(row.model),
+        cost: num(row.cost),
+        tokens: agg > 0 ? agg : undefined,
+        timeCreated: num(row.time_created),
+        timeIdle: num(row.time_idle),
+        idleOutcome: str(row.idle_outcome),
+      })
+    }
+    return out
+  }
+
+  return { enabled: ready, resolveCall, matchChild, info, children }
 }

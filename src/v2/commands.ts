@@ -125,6 +125,7 @@ export function makeCommands(
           `${t("settings.showEntryCost")}: ${onOff(signals.showEntryCost())}`,
           `${t("settings.showEntryTime")}: ${onOff(signals.showEntryTime())}`,
           `${t("settings.showEntryTokens")}: ${onOff(signals.showEntryTokens())}`,
+          `${t("settings.showOrigin")}: ${onOff(signals.showOrigin())}`,
           `${t("settings.timeFormat")}: ${TIME_FORMAT_SAMPLES[signals.timeFormat()]}`,
           `${t("settings.dbSync")}: ${onOff(signals.dbSync())}`,
         ].join("\n")
@@ -196,6 +197,19 @@ export function makeCommands(
         signals.setShowEntryTokens(v)
         kv.set(SETTING_KEYS.showEntryTokens, v)
         api.ui.toast(`${t("settings.showEntryTokens")}: ${onOff(v)}`)
+      },
+    },
+    {
+      id: "opencode-subagent-magazine.subagent.origin",
+      title: "SubAgent Magazine: Toggle Origin Indicators",
+      description: "Show or hide origin markers (⇢ background / ↳ spawned) in the sidebar list",
+      slash: { name: "subagent-origin" },
+      palette: true,
+      run: () => {
+        const v = !signals.showOrigin()
+        signals.setShowOrigin(v)
+        kv.set(SETTING_KEYS.showOrigin, v)
+        api.ui.toast(`${t("settings.showOrigin")}: ${onOff(v)}`)
       },
     },
     {

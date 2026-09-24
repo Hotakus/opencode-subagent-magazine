@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { contextTokens, createSessionDbIndex, findDbPath, modelIdOf, statusOfChild } from "../src/v2/db"
+import { contextTokens, createSessionDbIndex, findDbPath, isSessionActive, modelIdOf, statusOfChild } from "../src/v2/db"
 
 test("contextTokens mirrors the host readSessionTokens semantics", () => {
   assert.equal(contextTokens({ input: 10, output: 5, reasoning: 1, cache: { read: 100, write: 2 } }), 118)
@@ -15,6 +15,24 @@ test("statusOfChild only settles sessions whose time_idle is recorded", () => {
   assert.equal(statusOfChild({ id: "ses_a", timeIdle: 123, idleOutcome: "succeeded" }), "done")
   assert.equal(statusOfChild({ id: "ses_a", timeIdle: 123, idleOutcome: "interrupted" }), "cancelled")
   assert.equal(statusOfChild({ id: "ses_a", timeIdle: 123 }), "done")
+})
+
+test("isSessionActive treats post-idle activity as running (resumed sessions)", () => {
+  // Resumed session: old time_idle, newer assistant message.
+  assert.equal(isSessionActive({ timeIdle: 100, lastMessageType: "assistant", lastMessageAt: 200 }), true)
+  // Stopped: the last message is the idle marker.
+  assert.equal(isSessionActive({ timeIdle: 200, lastMessageType: "idle", lastMessageAt: 200 }), false)
+  // Never idled but has activity.
+  assert.equal(isSessionActive({ lastMessageType: "assistant", lastMessageAt: 200 }), true)
+  // No messages at all.
+  assert.equal(isSessionActive({}), false)
+  // Last message predates the recorded idle.
+  assert.equal(isSessionActive({ timeIdle: 300, lastMessageType: "assistant", lastMessageAt: 200 }), false)
+})
+
+test("statusOfChild stays unsettled while a session is active again", () => {
+  assert.equal(statusOfChild({ id: "ses_a", timeIdle: 100, active: true, idleOutcome: "succeeded" }), undefined)
+  assert.equal(statusOfChild({ id: "ses_a", timeIdle: 100, active: false, idleOutcome: "succeeded" }), "done")
 })
 
 test("modelIdOf accepts both string and object model shapes", () => {
