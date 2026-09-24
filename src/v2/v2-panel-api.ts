@@ -25,7 +25,12 @@ function toV1Part(p: Record<string, any>): Record<string, any> {
         .filter((t): t is string => typeof t === "string" && t.length > 0)
         .join("\n")
     }
-    return { type: "tool", tool: p.tool ?? p.name, state: st, subagent_type: p.subagent_type, metadata: normalizeMeta(p.metadata) }
+    // TUI 数据层把子代理 metadata 放在 part 级，旧缓存形状可能嵌在 state 里——两处合并后再双写。
+    const meta = normalizeMeta({
+      ...(((st as Record<string, unknown>).metadata ?? {}) as Record<string, unknown>),
+      ...((p.metadata ?? {}) as Record<string, unknown>),
+    })
+    return { type: "tool", id: p.id, tool: p.tool ?? p.name, state: st, subagent_type: p.subagent_type, metadata: meta }
   }
   if (p.type === "text") return { type: "text", text: String(p.text ?? "") }
   if (p.type === "file") return { type: "file", source: p.source ?? {} }
@@ -73,9 +78,55 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
     const [, mutate] = entry
     return mutate((d) => { d.value = value })
   }
+  // 原子 read-modify-write：宿主在存储锁内基于最新磁盘值
+  // 应用 updater，因此并发 TUI 实例会 merge，
+  // 而不是用过期快照互相覆盖。
+  const kvUpdate = (key: string, updater: (current: unknown) => unknown): Promise<void> => {
+    let entry = kvStore.get(key)
+    if (!entry) {
+      const created = context.storage.store<Record<string, any>>(`subagent_magazine.${key}`, {
+        initial: { value: undefined },
+      })
+      entry = created as [Record<string, any>, (fn: (d: Record<string, any>) => void) => Promise<void>]
+      kvStore.set(key, entry)
+    }
+    const [, mutate] = entry
+    return mutate((d) => { d.value = updater(d.value) })
+  }
 
   const isSubagentTool = (name: string | undefined): boolean =>
     name === SUBAGENT_TOOL_V2 || name === "task" || name === "delegate" || name === "call_omo_agent"
+
+  /** 事件未携带工具名/input 时，从宿主消息缓存中恢复。
+   *  V2 的 called/progress/success 事件没有 `name`，且
+   *  input.started 可能被错过（TUI 启动、插件重载、流抖动）——
+   *  没有这个回退，运行中的子代理要到完成时才会出现。 */
+  const findToolPart = (data: Record<string, any>): { name?: string; input?: Record<string, unknown> } | undefined => {
+    const sid = data.sessionID
+    const msgID = data.assistantMessageID
+    const partID = data.id
+    if (sid === undefined || msgID === undefined || partID === undefined) return undefined
+    try {
+      const raw = context.data.session.message.list(String(sid))
+      if (!raw) return undefined
+      for (let i = raw.length - 1; i >= 0; i--) {
+        const m = raw[i] as Record<string, any>
+        if (!m || String(m.id) !== String(msgID)) continue
+        const content = Array.isArray(m.content) ? m.content : []
+        for (const p of content) {
+          const pp = p as Record<string, any>
+          if (pp && pp.type === "tool" && String(pp.id) === String(partID)) {
+            const st = (pp.state ?? {}) as Record<string, any>
+            const input = (st.input && typeof st.input === "object") ? st.input as Record<string, unknown> : undefined
+            const name = pp.name ?? pp.tool
+            return { name: name !== undefined ? String(name) : undefined, input }
+          }
+        }
+        break
+      }
+    } catch {}
+    return undefined
+  }
 
   /** V2 tool 事件 → V1 ToolPart（非 subagent 工具返回 undefined——面板只关心子代理）。
    *  识别规则（对齐 V2 官方 stream-v2.subagent.ts）：
@@ -102,17 +153,27 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
       return { type: "tool", tool: normName(String(data.name)), id: String(data.id), state: { status: "pending", input: {} } }
     }
     if (type === "session.tool.called") {
-      const name = data.name ?? info?.name
+      let name: string | undefined = data.name ?? info?.name
+      let input: Record<string, unknown> | undefined =
+        (data.input as Record<string, unknown> | undefined) ?? info?.input
+      if (!name) {
+        const resolved = findToolPart(data)
+        if (resolved?.name) {
+          name = resolved.name
+          if (input === undefined) input = resolved.input
+        }
+      }
       if (name && !isSubagentTool(name)) return undefined
       if (!name) return undefined
-      if (key) toolInfo.set(key, { name: String(name), input: data.input ?? {} })
+      if (key) toolInfo.set(key, { name: String(name), input: input ?? {} })
       return {
-        type: "tool", tool: normName(String(name)), id: String(data.id), subagent_type: agentOf(data.input),
-        state: { status: "running", input: data.input ?? {}, metadata: {} },
+        type: "tool", tool: normName(String(name)), id: String(data.id), subagent_type: agentOf(input),
+        state: { status: "running", input: input ?? {}, metadata: {} },
       }
     }
     if (type === "session.tool.progress") {
-      const name = data.name ?? info?.name
+      let name: string | undefined = data.name ?? info?.name
+      if (!name) name = findToolPart(data)?.name
       if (name && !isSubagentTool(name)) return undefined
       if (!name) return undefined
       return {
@@ -127,14 +188,22 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
       // 忽略——最终状态由 execution.interrupted → settleOnIdle 裁定 cancelled
       // （否则 handlePartUpdated 的 error 分支会把 cancel_requested 覆盖成 error）
       if (type === "session.tool.failed" && meta.status === "running") return undefined
-      const name = data.name ?? info?.name
+      let name: string | undefined = data.name ?? info?.name
+      let input: Record<string, unknown> | undefined =
+        info?.input ?? (data.input as Record<string, unknown> | undefined)
+      if (!name || input === undefined) {
+        const resolved = findToolPart(data)
+        if (!name && resolved?.name) name = resolved.name
+        if (input === undefined && resolved?.input) input = resolved.input
+      }
       if (name && !isSubagentTool(name)) return undefined
-      const input = info?.input ?? data.input ?? {}
+      if (key && name) toolInfo.set(key, { name: String(name), input: input ?? info?.input ?? {} })
+      const finalInput = input ?? {}
       return {
-        type: "tool", tool: normName(String(name ?? "task")), id: String(data.id), subagent_type: agentOf(input),
+        type: "tool", tool: normName(String(name ?? "task")), id: String(data.id), subagent_type: agentOf(finalInput),
         state: {
           status: type === "session.tool.failed" ? "error" : "completed",
-          input,
+          input: finalInput,
           metadata: meta,
         },
       }
@@ -159,10 +228,47 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
     return out
   }
 
+  // ── usage enrichment（用量补全）──
+  // TUI 数据层只为已加载的会话缓存 messages。从 KV 恢复的
+  // 子会话通常没有缓存，因此读取依次回退到
+  // 会话级聚合值、最后是（限流的）message sync——
+  // 结果写入本地缓存，供面板的周期性 enrichment 读取。
+  const usageCache = new Map<string, { tokens?: number; cost?: number; model?: string; at: number }>()
+  const syncRequestedAt = new Map<string, number>()
+  const USAGE_CACHE_TTL_MS = 5000
+  const SYNC_THROTTLE_MS = 30000
+
+  const rememberUsage = (sid: string, patch: { tokens?: number; cost?: number; model?: string }) => {
+    const prev = usageCache.get(sid)
+    usageCache.set(sid, { ...prev, ...patch, at: Date.now() })
+  }
+
+  const cachedUsage = (sid: string) => {
+    const hit = usageCache.get(sid)
+    if (!hit) return undefined
+    if (Date.now() - hit.at > USAGE_CACHE_TTL_MS) return undefined
+    return hit
+  }
+
+  const requestMessageSync = (sid: string) => {
+    const last = syncRequestedAt.get(sid) ?? 0
+    if (Date.now() - last < SYNC_THROTTLE_MS) return
+    syncRequestedAt.set(sid, Date.now())
+    try {
+      const sync = context.data.session.message.sync
+      if (typeof sync === "function") void sync.call(context.data.session.message, sid).catch(() => {})
+    } catch {}
+  }
+
+  const listedSession = (sid: string) => {
+    try { return context.data.session.list()?.find((s) => s.id === sid) } catch { return undefined }
+  }
+
   return {
     kv: {
       get: kvGet,
       set: kvSet as (key: string, value: unknown) => void,
+      update: kvUpdate,
     },
     usage: {
       readSessionTokens: (sid: string): number | undefined => {
@@ -181,24 +287,45 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
                 (Number(t.reasoning) || 0) +
                 (Number(t.cache?.read) || 0) +
                 (Number(t.cache?.write) || 0)
-              if (ctx > 0) return ctx
+              if (ctx > 0) { rememberUsage(sid, { tokens: ctx }); return ctx }
             }
           }
+          // 本地无消息（子会话尚未加载）：使用最近同步的值，
+          // 否则请数据层同步，稍后重试。
+          const cached = cachedUsage(sid)?.tokens
+          if (cached !== undefined) return cached
+          requestMessageSync(sid)
           return undefined
         } catch { return undefined }
       },
       readSessionCost: (sid: string): number | undefined => {
         if (!sid) return undefined
         try {
+          const direct = context.data.session.cost(sid)
+          if (typeof direct === "number" && direct > 0) { rememberUsage(sid, { cost: direct }); return direct }
+        } catch {}
+        try {
           const session = context.data.session.get(sid)
-          if (session?.cost != null && session.cost > 0) return session.cost
+          if (session?.cost != null && session.cost > 0) { rememberUsage(sid, { cost: session.cost }); return session.cost }
+          const listed = listedSession(sid)
+          if (listed?.cost != null && listed.cost > 0) { rememberUsage(sid, { cost: listed.cost }); return listed.cost }
           const msgs = context.data.session.message.list(sid)
-          if (!msgs) return undefined
-          let total = 0
-          for (const m of msgs as any[]) {
-            if (m.type === "assistant" && typeof m.cost === "number") total += m.cost
+          if (Array.isArray(msgs) && msgs.length > 0) {
+            let total = 0
+            let sawAssistant = false
+            for (const m of msgs as any[]) {
+              if (m.type !== "assistant") continue
+              sawAssistant = true
+              if (typeof m.cost === "number") total += m.cost
+            }
+            // 已加载的历史是权威来源：assistant 消息 cost 为 0 表示
+            // 该会话确实免费（如 budget/test 模型），而非未知。
+            if (sawAssistant) { rememberUsage(sid, { cost: total }); return total }
           }
-          return total > 0 ? total : undefined
+          const cached = cachedUsage(sid)?.cost
+          if (cached !== undefined) return cached
+          requestMessageSync(sid)
+          return undefined
         } catch { return undefined }
       },
       readSessionModel: (sid: string): string | undefined => {
@@ -210,17 +337,37 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
               const m = msgs[i] as Record<string, any>
               if (m.type !== "assistant") continue
               const model = m.model as { id?: string } | string | undefined
-              if (typeof model === "string") return model
-              if (model?.id) return String(model.id)
+              const id = typeof model === "string" ? model : model?.id
+              if (id) { rememberUsage(sid, { model: String(id) }); return String(id) }
             }
           }
+          const session = context.data.session.get(sid)
+          if (session?.model) { rememberUsage(sid, { model: String(session.model) }); return String(session.model) }
+          const listed = listedSession(sid)
+          if (listed?.model) { rememberUsage(sid, { model: String(listed.model) }); return String(listed.model) }
+          const cached = cachedUsage(sid)?.model
+          if (cached !== undefined) return cached
+          requestMessageSync(sid)
           return undefined
         } catch { return undefined }
       },
       readSessionTodo: () => undefined, // V2 无 todo 数据源
     },
     session: {
-      get: (sid) => { try { return context.data.session.get(sid) as any } catch { return undefined } },
+      get: (sid) => {
+        try {
+          const direct = context.data.session.get(sid)
+          if (direct) return direct as any
+          // 较旧的子会话可能未注入本地缓存；回退到
+          // 会话列表，保证基于 parentID 的路由继续工作。
+          const list = context.data.session.list?.()
+          if (Array.isArray(list)) {
+            const found = list.find((s) => (s as any)?.id === sid)
+            if (found) return found as any
+          }
+          return undefined
+        } catch { return undefined }
+      },
       status: (sid) => {
         try {
           const st = context.data.session.status(sid)
@@ -251,11 +398,13 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
             for (const evt of ["session.tool.input.started", "session.tool.called", "session.tool.progress", "session.tool.success", "session.tool.failed"]) {
               unsubs.push(context.data.on(evt, (e) => {
                 const part = toolEventToPart((e as Record<string, any>))
-                if (!part) return
+                const evtData = (e as Record<string, any>).data as Record<string, any> | undefined
+                if (!part) {
+                  return
+                }
                 // V2 事件流是全局的（跨所有会话）；把发起会话 ID 一并传给面板，
                 // 让面板只归账到正在查看的会话（V1 宿主已按会话 scope，无需该字段）。
-                const evt = (e as Record<string, any>).data as Record<string, any> | undefined
-                const sid = evt?.sessionID !== undefined ? String(evt.sessionID) : undefined
+                const sid = evtData?.sessionID !== undefined ? String(evtData.sessionID) : undefined
                 if (!sid) return
                 cb({ type, scope: "global", payload: { part, sessionID: sid } })
               }))

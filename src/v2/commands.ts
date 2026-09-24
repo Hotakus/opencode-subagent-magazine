@@ -140,28 +140,49 @@ export function makeCommands(context: Context, api: PanelApi, signals: SharedSig
           }
         }
         if (count > 0) {
-          try {
-            const data = loadSessionData(kv)
-            const { parentSid, isChild } = resolveParent(sid)
-            if (isChild) {
-              if (!data[parentSid]) data[parentSid] = { ts: Date.now(), entries: [], scroll: 0, expanded: "", children: {} }
-              if (!data[parentSid].children) data[parentSid].children = {}
-              if (!data[parentSid].children[sid]) data[parentSid].children[sid] = { scroll: 0, expanded: "", entries: [] }
-              data[parentSid].children[sid] = { ...data[parentSid].children[sid], entries: [...entries.values()] }
-            } else {
-              data[sid] = {
-                ts: Date.now(),
-                entries: [...entries.values()],
-                scroll: data[sid]?.scroll ?? 0,
-                expanded: data[sid]?.expanded ?? "",
-                children: data[sid]?.children ?? {},
-              }
-            }
-            saveSessionData(kv, data)
-          } catch {}
-          api.ui.toast(signals.lang() === "zh"
+          const ok = () => api.ui.toast(signals.lang() === "zh"
             ? `已标记 ${count} 个运行中的条目为完成`
             : `Marked ${count} running entries as done`)
+          const fail = () => {
+            try { api.ui.toast(t("clear.failed")) } catch {}
+          }
+          try {
+            const { parentSid, isChild } = resolveParent(sid)
+            const done = updateSessionData(kv, (data) => {
+              // 落定前先把（可能过期的）模块缓存与持久化记录
+              // merge：其他实例可能有本实例从未见过的条目，
+              // 这次写入不能把它们丢掉。
+              if (isChild) {
+                if (!data[parentSid]) data[parentSid] = { ts: Date.now(), entries: [], scroll: 0, expanded: "", children: {} }
+                if (!data[parentSid].children) data[parentSid].children = {}
+                const prev = data[parentSid].children[sid]?.entries ?? []
+                const merged = [...mergeSubEntries(prev, entries.values()).values()].map((e) =>
+                  e.status === "running" || e.status === "cancel_requested"
+                    ? { ...e, status: "done" as SubStatus, endedAt: e.endedAt ?? Date.now() }
+                    : e
+                )
+                data[parentSid].children[sid] = {
+                  ...(data[parentSid].children[sid] ?? { scroll: 0, expanded: "" }),
+                  entries: merged,
+                }
+              } else {
+                const rec = data[parentSid] ?? { ts: Date.now(), entries: [], scroll: 0, expanded: "", children: {} }
+                const merged = [...mergeSubEntries(rec.entries ?? [], entries.values()).values()].map((e) =>
+                  e.status === "running" || e.status === "cancel_requested"
+                    ? { ...e, status: "done" as SubStatus, endedAt: e.endedAt ?? Date.now() }
+                    : e
+                )
+                data[parentSid] = { ...rec, ts: Date.now(), entries: merged, children: rec.children ?? {} }
+              }
+            })
+            if (done && typeof (done as Promise<void>).then === "function") {
+              void (done as Promise<void>).then(ok, fail)
+            } else {
+              ok()
+            }
+          } catch {
+            fail()
+          }
         } else {
           api.ui.toast(signals.lang() === "zh" ? "没有需要清理的运行中条目" : "No running entries to clear")
         }
@@ -216,32 +237,42 @@ export function makeCommands(context: Context, api: PanelApi, signals: SharedSig
         })
         if (choice !== "yes") return
         try {
-          const data = loadSessionData(kv)
           let count = 0
-          if (parentID) {
-            if (data[parentID]?.children?.[sid]) {
-              const child = data[parentID].children[sid]
-              const ids = child.entries?.map((e) => e.id) ?? []
-              count = ids.length
-              child.entries = []
-              child.scroll = 0
-              child.expanded = ""
-              child.clearedIds = [...new Set([...(child.clearedIds ?? []), ...ids])]
-            }
-          } else {
-            count = data[sid]?.entries?.length ?? 0
-            if (data[sid]) {
-              const ids = data[sid].entries?.map((e) => e.id) ?? []
-              data[sid].entries = []
-              data[sid].scroll = 0
-              data[sid].expanded = ""
-              data[sid].clearedIds = [...new Set([...(data[sid].clearedIds ?? []), ...ids])]
-            }
+          const finish = () => {
+            globalEntryCache.delete(sid)
+            setClearTick((v) => v + 1)
+            api.ui.toast(t("clear.done", { n: count }))
           }
-          saveSessionData(kv, data)
-          globalEntryCache.delete(sid)
-          setClearTick((v) => v + 1)
-          api.ui.toast(t("clear.done", { n: count }))
+          const done = updateSessionData(kv, (data) => {
+            if (parentID) {
+              const child = data[parentID]?.children?.[sid]
+              if (child) {
+                const ids = child.entries?.map((e) => e.id) ?? []
+                count = ids.length
+                child.entries = []
+                child.scroll = 0
+                child.expanded = ""
+                child.clearedIds = [...new Set([...(child.clearedIds ?? []), ...ids])]
+              }
+            } else {
+              const rec = data[sid]
+              if (rec) {
+                const ids = rec.entries?.map((e) => e.id) ?? []
+                count = ids.length
+                rec.entries = []
+                rec.scroll = 0
+                rec.expanded = ""
+                rec.clearedIds = [...new Set([...(rec.clearedIds ?? []), ...ids])]
+              }
+            }
+          })
+          if (done && typeof (done as Promise<void>).then === "function") {
+            void (done as Promise<void>).then(finish, () => {
+              try { api.ui.toast(t("clear.failed")) } catch {}
+            })
+          } else {
+            finish()
+          }
         } catch {}
       },
     },
