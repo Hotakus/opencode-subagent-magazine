@@ -2,6 +2,7 @@ import type { SubEntry, SubStatus } from "../core/types"
 
 export type SubEntryPatch = Omit<SubEntry, "startedAt" | "endedAt"> & {
   startedAt?: number
+  endedAt?: number
 }
 
 export function findSubEntryKey(
@@ -33,7 +34,7 @@ export function upsertSubEntry(
     ...partial,
     id: existing?.id ?? partial.id,
     startedAt: existing?.startedAt || partial.startedAt || now,
-    endedAt: ended ? (existing?.endedAt || now) : undefined,
+    endedAt: ended ? (existing?.endedAt ?? partial.endedAt ?? now) : undefined,
   })
   return next
 }

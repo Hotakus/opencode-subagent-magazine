@@ -38,3 +38,14 @@ test("keeps different child sessions separate", () => {
 
   assert.equal(entries.size, 2)
 })
+
+test("restoring a terminal entry from KV keeps its persisted endedAt", () => {
+  let entries = new Map<string, SubEntry>()
+  entries = upsertSubEntry(
+    entries,
+    { ...entry("tool:done", "child-9", "done"), startedAt: 400, endedAt: 500 },
+    999_999,
+  )
+
+  assert.equal(entries.get("tool:done")?.endedAt, 500)
+})
