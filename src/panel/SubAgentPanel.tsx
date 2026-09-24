@@ -1078,6 +1078,17 @@ export function SubAgentPanel(props: {
           }
         })
       }
+      // 周期性对账（约每 30s）：存在 running 条目时与历史重扫一次，
+      // 兜底丢失的 success / idle 事件（含消息同步后才可见的 part）。
+      if (tick % 60 === 0) {
+        untrack(() => {
+          const hasRunning = entryList().some((e) => e.status === "running" || e.status === "cancel_requested")
+          if (hasRunning) {
+            runSessionScan(props.sessionId, false)
+            bump()
+          }
+        })
+      }
       bump()
     }, 500)
     bump()

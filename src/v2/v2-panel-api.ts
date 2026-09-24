@@ -183,7 +183,6 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
     }
     if (type === "session.tool.success" || type === "session.tool.failed") {
       const meta = normalizeMeta(data.metadata)
-      if (meta.sessionID === undefined) return undefined
       // 取消导致的工具失败：metadata.status 是工具被打断时的状态（"running"）——不是真错误。
       // 忽略——最终状态由 execution.interrupted → settleOnIdle 裁定 cancelled
       // （否则 handlePartUpdated 的 error 分支会把 cancel_requested 覆盖成 error）
@@ -199,6 +198,11 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
       if (name && !isSubagentTool(name)) return undefined
       if (key && name) toolInfo.set(key, { name: String(name), input: input ?? info?.input ?? {} })
       const finalInput = input ?? {}
+      // 后台任务缺少子会话 metadata 时无法判定终态，交给扫描/轮询兜底；
+      // 前台任务没有 sessionID 也必须回传 completed，否则条目会一直停在 running。
+      if (meta.sessionID === undefined && (finalInput.background === true || finalInput.run_in_background === true)) {
+        return undefined
+      }
       return {
         type: "tool", tool: normName(String(name ?? "task")), id: String(data.id), subagent_type: agentOf(finalInput),
         state: {
