@@ -57,7 +57,12 @@
 - **手动清除条目**：`/subagent-clear-entries` 清除当前会话所有记录，防止历史条目扫描重建
 - **语言适配**：支持 `/subagent-lang` 运行时切换中/英文，偏好持久化
 - **可切换边框**：`/subagent-border` 控制面板外边框显隐（默认隐藏），开启后与缓存统计面板风格统一
-- **斜杠命令**：`/subagent-lang` `/subagent-max` `/subagent-order` `/subagent-scroll` `/subagent-ttl` `/subagent-clear-entries` `/subagent-session` `/subagent-version` `/subagent-clear-running` `/subagent-border` 动态配置
+- **多实例安全**：多开 TUI 时条目不再互相覆盖（原子合并写入）
+- **漏事件兜底**：周期性校正 + 历史扫描 + 发现轮询，掉事件的子代理也能恢复显示
+- **条目显示开关**：`/subagent-cost` 控制列表内条目费用（4 位小数，默认关；展开区始终显示）；`/subagent-time`、`/subagent-tokens` 控制耗时与 Token（默认开，保持原有显示）
+- **耗时格式**：`/subagent-time-format` 可选 short（默认）/ decimal / clock / compact / seconds
+- **设置菜单**：`/subagent-sections` 打开原生循环设置菜单（V2）；`/subagent-config` 查看当前设置摘要
+- **斜杠命令**：`/subagent-lang` `/subagent-max` `/subagent-order` `/subagent-scroll` `/subagent-ttl` `/subagent-clear-entries` `/subagent-session` `/subagent-version` `/subagent-clear-running` `/subagent-border` `/subagent-config` `/subagent-sections` `/subagent-cost` `/subagent-time` `/subagent-tokens` `/subagent-time-format` 动态配置
 
 ---
 
@@ -152,6 +157,12 @@ npm install -g opencode-subagent-magazine@latest
 | `/subagent-version` | 查看插件版本 | 弹出当前插件版本号 |
 | `/subagent-clear-running` | 批量清理僵尸条目 | 一键将所有运行中的条目标记为完成，清理卡住的旧数据 |
 | `/subagent-border` | 开关面板边框 | 切换面板外边框显隐（默认隐藏），即时生效并持久化 |
+| `/subagent-config` | 查看设置摘要 | 弹窗列出语言、条目数、排序、翻页、保留期、边框与各显示开关的当前值 |
+| `/subagent-sections` | 打开设置菜单 | 原生选择列表逐项修改，修改后自动回到菜单（Esc 关闭） |
+| `/subagent-cost` | 开关条目费用 | 列表内条目费用显示（4 位小数，默认关；展开区始终显示） |
+| `/subagent-time` | 开关条目耗时 | 列表内耗时显示（默认开） |
+| `/subagent-tokens` | 开关条目 Token | 列表内 Token 显示（默认开） |
+| `/subagent-time-format` | 切换耗时格式 | short（默认 45.32s / 112m35s）/ decimal / clock / compact / seconds |
 
 <div align="center">
   <img src="https://raw.githubusercontent.com/Hotakus/opencode-subagent-magazine/master/assets/slash_cmds.png" alt="斜杠命令" width="49%"></img>

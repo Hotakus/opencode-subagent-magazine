@@ -11,8 +11,9 @@ import type {
 import { createSignal } from "solid-js"
 import { PLUGIN_VERSION } from "./_version"
 import { LANG_META, createT, detectLang } from "./i18n"
-import type { Lang, SortOrder, ScrollMode, SubStatus, SharedSignals } from "./core/types"
+import type { Lang, SortOrder, ScrollMode, SubStatus, SharedSignals, TimeFormat } from "./core/types"
 import { KV_PREFIX } from "./core/kv"
+import { TIME_FORMATS, TIME_FORMAT_SAMPLES } from "./core/format"
 import type { PanelApi } from "./panel/panel-api"
 import { SubAgentPanel } from "./panel/SubAgentPanel"
 import { globalEntryCache, setClearTick } from "./panel/store"
@@ -35,6 +36,10 @@ function createSidebarSlot(api: TuiPluginApi, panelApi: PanelApi, sig: SharedSig
             sortOrder={sig.sortOrder}
             scrollMode={sig.scrollMode}
             borderVisible={sig.borderVisible}
+            showEntryCost={sig.showEntryCost}
+            showEntryTime={sig.showEntryTime}
+            showEntryTokens={sig.showEntryTokens}
+            timeFormat={sig.timeFormat}
             sessionId={input.session_id}
           />
         )
@@ -61,8 +66,24 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
   const [borderVisible, setBorderVisible] = createSignal<boolean>(
     (api.kv.get(`${KV_PREFIX}.border`, false) as boolean) === true
   )
+  const [showEntryCost, setShowEntryCost] = createSignal<boolean>(
+    (api.kv.get(`${KV_PREFIX}.show_entry_cost`, false) as boolean) === true
+  )
+  const [showEntryTime, setShowEntryTime] = createSignal<boolean>(
+    (api.kv.get(`${KV_PREFIX}.show_entry_time`, true) as boolean) !== false
+  )
+  const [showEntryTokens, setShowEntryTokens] = createSignal<boolean>(
+    (api.kv.get(`${KV_PREFIX}.show_entry_tokens`, true) as boolean) !== false
+  )
+  const storedTimeFormat = String(api.kv.get(`${KV_PREFIX}.time_format`, "short"))
+  const [timeFormat, setTimeFormat] = createSignal<TimeFormat>(
+    (TIME_FORMATS as readonly string[]).includes(storedTimeFormat) ? (storedTimeFormat as TimeFormat) : "short"
+  )
+  const [dbSync, setDbSync] = createSignal<boolean>(
+    (api.kv.get(`${KV_PREFIX}.db_sync`, true) as boolean) !== false
+  )
 
-  const signals: SharedSignals = { lang, setLang, maxEntries, setMaxEntries, sortOrder, setSortOrder, scrollMode, setScrollMode, borderVisible, setBorderVisible, sessionId: "" }
+  const signals: SharedSignals = { lang, setLang, maxEntries, setMaxEntries, sortOrder, setSortOrder, scrollMode, setScrollMode, borderVisible, setBorderVisible, showEntryCost, setShowEntryCost, showEntryTime, setShowEntryTime, showEntryTokens, setShowEntryTokens, timeFormat, setTimeFormat, dbSync, setDbSync, sessionId: "" }
 
   // ── V1 PanelApi adapter: wraps the V1 host API into the shared panel contract ──
   const v1Api: PanelApi = {
@@ -460,6 +481,76 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
         signals.setBorderVisible(!cur)
         api.ui.toast({ message: !cur ? t("borderShown") : t("borderHidden") })
         dialog?.clear()
+      },
+    },
+    {
+      title: "SubAgent Magazine: Entry Cost",
+      value: "subagent-cost",
+      description: "Show or hide the per-sub-agent cost in the sidebar",
+      slash: { name: "subagent-cost" },
+      onSelect: (dialog) => {
+        const t = createT(() => signals.lang())
+        const cur = Boolean(api.kv.get(`${KV_PREFIX}.show_entry_cost`, false))
+        api.kv.set(`${KV_PREFIX}.show_entry_cost`, !cur)
+        signals.setShowEntryCost(!cur)
+        api.ui.toast({
+          message: `${t("settings.showEntryCost")}: ${!cur ? t("settings.on") : t("settings.off")}`,
+        })
+        dialog?.clear()
+      },
+    },
+    {
+      title: "SubAgent Magazine: Entry Time",
+      value: "subagent-time",
+      description: "Show or hide the elapsed time in the sidebar list",
+      slash: { name: "subagent-time" },
+      onSelect: (dialog) => {
+        const t = createT(() => signals.lang())
+        const cur = Boolean(api.kv.get(`${KV_PREFIX}.show_entry_time`, true))
+        api.kv.set(`${KV_PREFIX}.show_entry_time`, !cur)
+        signals.setShowEntryTime(!cur)
+        api.ui.toast({
+          message: `${t("settings.showEntryTime")}: ${!cur ? t("settings.on") : t("settings.off")}`,
+        })
+        dialog?.clear()
+      },
+    },
+    {
+      title: "SubAgent Magazine: Entry Tokens",
+      value: "subagent-tokens",
+      description: "Show or hide the token count in the sidebar list",
+      slash: { name: "subagent-tokens" },
+      onSelect: (dialog) => {
+        const t = createT(() => signals.lang())
+        const cur = Boolean(api.kv.get(`${KV_PREFIX}.show_entry_tokens`, true))
+        api.kv.set(`${KV_PREFIX}.show_entry_tokens`, !cur)
+        signals.setShowEntryTokens(!cur)
+        api.ui.toast({
+          message: `${t("settings.showEntryTokens")}: ${!cur ? t("settings.on") : t("settings.off")}`,
+        })
+        dialog?.clear()
+      },
+    },
+    {
+      title: "SubAgent Magazine: Time Format",
+      value: "subagent-time-format",
+      description: "Set how elapsed time is displayed",
+      slash: { name: "subagent-time-format" },
+      onSelect: (dialog) => {
+        dialog?.replace(() => (
+          <api.ui.DialogSelect
+            title="Time Format / 时间格式"
+            options={TIME_FORMATS.map((f) => ({ title: `${f} — ${TIME_FORMAT_SAMPLES[f]}`, value: f }))}
+            onSelect={(opt) => {
+              const f = opt.value as TimeFormat
+              setTimeFormat(f)
+              api.kv.set(`${KV_PREFIX}.time_format`, f)
+              const t = createT(() => lang())
+              api.ui.toast({ message: `${t("settings.timeFormat")}: ${TIME_FORMAT_SAMPLES[f]}` })
+              dialog?.clear()
+            }}
+          />
+        ))
       },
     },
   ])

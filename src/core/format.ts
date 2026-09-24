@@ -1,3 +1,5 @@
+import type { TimeFormat } from "./types"
+
 /** Visual width of a single character (CJK/wide chars count as 2). */
 function charColumns(c: string): number {
   const code = c.codePointAt(0) ?? 0
@@ -45,6 +47,48 @@ export function fmtDurationShort(ms: number, running: boolean): string {
   const m = Math.floor(ms / 60000)
   const s = Math.round((ms % 60000) / 1000)
   return `${m}m${s}s`
+}
+
+/** All supported elapsed-time display modes, in picker order. */
+export const TIME_FORMATS: readonly TimeFormat[] = ["short", "decimal", "clock", "compact", "seconds"]
+
+/** Neutral samples shown in the time-format picker (language independent). */
+export const TIME_FORMAT_SAMPLES: Record<TimeFormat, string> = {
+  decimal: "45.3s · 9.5m · 1.9h",
+  short: "45.32s · 112m35s",
+  clock: "0:45 · 1:52:35",
+  compact: "45s · 1h52m",
+  seconds: "45s · 6755s",
+}
+
+/** Formats elapsed milliseconds using the configured display mode. */
+export function fmtDuration(ms: number, running: boolean, mode: TimeFormat = "short"): string {
+  if (running && ms < 2000) return ""
+  const t = Number.isFinite(ms) && ms > 0 ? ms : 0
+  switch (mode) {
+    case "short":
+      return fmtDurationShort(t, false)
+    case "compact": {
+      if (t < 60000) return `${Math.floor(t / 1000)}s`
+      if (t < 3600000) return `${Math.floor(t / 60000)}m${Math.floor((t % 60000) / 1000)}s`
+      return `${Math.floor(t / 3600000)}h${Math.floor((t % 3600000) / 60000)}m`
+    }
+    case "clock": {
+      const s = Math.floor((t % 60000) / 1000)
+      if (t < 3600000) return `${Math.floor(t / 60000)}:${String(s).padStart(2, "0")}`
+      const m = Math.floor((t % 3600000) / 60000)
+      return `${Math.floor(t / 3600000)}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
+    }
+    case "seconds":
+      return `${Math.floor(t / 1000)}s`
+    case "decimal":
+    default: {
+      // Promote units when rounding would show "60.0s" / "60.0m".
+      if (t < 59950) return `${(t / 1000).toFixed(1)}s`
+      if (t < 3597000) return `${(t / 60000).toFixed(1)}m`
+      return `${(t / 3600000).toFixed(1)}h`
+    }
+  }
 }
 
 export function fmtTokens(n: number): string {

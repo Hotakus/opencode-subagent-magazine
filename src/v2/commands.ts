@@ -1,16 +1,24 @@
 import type { Context, KeymapCommand } from "./types"
 import type { PanelApi } from "../panel/panel-api"
-import type { Lang, SharedSignals, SubStatus } from "../core/types"
-import { KV_PREFIX, SETTING_KEYS, loadSessionData, saveSessionData, readTTLDays } from "../core/kv"
+import type { Lang, SharedSignals, SubStatus, TimeFormat } from "../core/types"
+import { TIME_FORMATS, TIME_FORMAT_SAMPLES } from "../core/format"
+import { KV_PREFIX, SETTING_KEYS, updateSessionData, readTTLDays } from "../core/kv"
 import { PLUGIN_VERSION } from "../_version"
 import { LANG_META, createT } from "../i18n"
 import { globalEntryCache, setClearTick } from "../panel/store"
+import { mergeSubEntries } from "../panel/entry-map"
+import { openSettingsMenu } from "./settings-menu"
 
 /** V2 命令（对齐 V1 的 9 个斜杠命令——promise 式对话框）。 */
-export function makeCommands(context: Context, api: PanelApi, signals: SharedSignals): KeymapCommand[] {
+export function makeCommands(
+  context: Context,
+  api: PanelApi,
+  signals: SharedSignals,
+): KeymapCommand[] {
   const t = createT(() => signals.lang())
   const kv = api.kv
   const clampMax = (n: number) => Math.max(1, Math.min(50, n))
+  const onOff = (v: boolean) => (v ? t("settings.on") : t("settings.off"))
 
   const resolveParent = (sid: string): { parentSid: string; isChild: boolean } => {
     try {
@@ -99,6 +107,111 @@ export function makeCommands(context: Context, api: PanelApi, signals: SharedSig
       },
     },
     {
+      id: "opencode-subagent-magazine.subagent.config",
+      title: "SubAgent Magazine: Settings",
+      description: "Show current settings (change each via its own command)",
+      slash: { name: "subagent-config" },
+      palette: true,
+      run: () => {
+        const ttl = readTTLDays(kv)
+        const langLabel = LANG_META.find((m) => m.code === signals.lang())?.label ?? signals.lang()
+        const message = [
+          `${t("settings.lang")}: ${langLabel}`,
+          `${t("settings.max")}: ${signals.maxEntries()}`,
+          `${t("settings.order")}: ${signals.sortOrder() === "desc" ? t("order.desc") : t("order.asc")}`,
+          `${t("settings.scroll")}: ${signals.scrollMode() === "wheel" ? t("scroll.wheel") : t("scroll.click")}`,
+          `${t("settings.ttl")}: ${ttl === 0 ? t("ttl.unlimited") : `${ttl}d`}`,
+          `${t("settings.border")}: ${onOff(signals.borderVisible())}`,
+          `${t("settings.showEntryCost")}: ${onOff(signals.showEntryCost())}`,
+          `${t("settings.showEntryTime")}: ${onOff(signals.showEntryTime())}`,
+          `${t("settings.showEntryTokens")}: ${onOff(signals.showEntryTokens())}`,
+          `${t("settings.timeFormat")}: ${TIME_FORMAT_SAMPLES[signals.timeFormat()]}`,
+          `${t("settings.dbSync")}: ${onOff(signals.dbSync())}`,
+        ].join("\n")
+        context.ui.toast.show({ title: t("settings.title"), message })
+      },
+    },
+    {
+      id: "opencode-subagent-magazine.subagent.sections",
+      title: "SubAgent Magazine: Settings Menu",
+      description: "Open the interactive settings menu (Esc to close)",
+      slash: { name: "subagent-sections" },
+      palette: true,
+      run: () => {
+        openSettingsMenu(context, api, signals)
+      },
+    },
+    {
+      id: "opencode-subagent-magazine.subagent.cost",
+      title: "SubAgent Magazine: Toggle Entry Cost",
+      description: "Show or hide the per-sub-agent cost in the sidebar",
+      slash: { name: "subagent-cost" },
+      palette: true,
+      run: () => {
+        const v = !signals.showEntryCost()
+        signals.setShowEntryCost(v)
+        kv.set(SETTING_KEYS.showEntryCost, v)
+        api.ui.toast(`${t("settings.showEntryCost")}: ${onOff(v)}`)
+      },
+    },
+    {
+      id: "opencode-subagent-magazine.subagent.time",
+      title: "SubAgent Magazine: Toggle Entry Time",
+      description: "Show or hide the elapsed time in the sidebar list",
+      slash: { name: "subagent-time" },
+      palette: true,
+      run: () => {
+        const v = !signals.showEntryTime()
+        signals.setShowEntryTime(v)
+        kv.set(SETTING_KEYS.showEntryTime, v)
+        api.ui.toast(`${t("settings.showEntryTime")}: ${onOff(v)}`)
+      },
+    },
+    {
+      id: "opencode-subagent-magazine.subagent.time-format",
+      title: "SubAgent Magazine: Time Format",
+      description: "Set how elapsed time is displayed (short / decimal / clock / compact / seconds)",
+      slash: { name: "subagent-time-format" },
+      palette: true,
+      run: async () => {
+        const picked = await context.ui.dialog.select<TimeFormat>({
+          title: t("settings.timeFormat"),
+          options: TIME_FORMATS.map((f) => ({ title: `${f} — ${TIME_FORMAT_SAMPLES[f]}`, value: f })),
+          current: signals.timeFormat(),
+        })
+        if (!picked) return
+        signals.setTimeFormat(picked)
+        kv.set(SETTING_KEYS.timeFormat, picked)
+        api.ui.toast(`${t("settings.timeFormat")}: ${TIME_FORMAT_SAMPLES[picked]}`)
+      },
+    },
+    {
+      id: "opencode-subagent-magazine.subagent.tokens",
+      title: "SubAgent Magazine: Toggle Entry Tokens",
+      description: "Show or hide the token count in the sidebar list",
+      slash: { name: "subagent-tokens" },
+      palette: true,
+      run: () => {
+        const v = !signals.showEntryTokens()
+        signals.setShowEntryTokens(v)
+        kv.set(SETTING_KEYS.showEntryTokens, v)
+        api.ui.toast(`${t("settings.showEntryTokens")}: ${onOff(v)}`)
+      },
+    },
+    {
+      id: "opencode-subagent-magazine.subagent.db",
+      title: "SubAgent Magazine: Toggle Local DB",
+      description: "Enrich sub-agent entries from the local OpenCode database (V2)",
+      slash: { name: "subagent-db" },
+      palette: true,
+      run: () => {
+        const v = !signals.dbSync()
+        signals.setDbSync(v)
+        kv.set(SETTING_KEYS.dbSync, v)
+        api.ui.toast(`${t("settings.dbSync")}: ${onOff(v)}`)
+      },
+    },
+    {
       id: "opencode-subagent-magazine.subagent.version",
       title: "SubAgent Magazine: Version",
       description: "Show plugin version",
@@ -140,28 +253,49 @@ export function makeCommands(context: Context, api: PanelApi, signals: SharedSig
           }
         }
         if (count > 0) {
-          try {
-            const data = loadSessionData(kv)
-            const { parentSid, isChild } = resolveParent(sid)
-            if (isChild) {
-              if (!data[parentSid]) data[parentSid] = { ts: Date.now(), entries: [], scroll: 0, expanded: "", children: {} }
-              if (!data[parentSid].children) data[parentSid].children = {}
-              if (!data[parentSid].children[sid]) data[parentSid].children[sid] = { scroll: 0, expanded: "", entries: [] }
-              data[parentSid].children[sid] = { ...data[parentSid].children[sid], entries: [...entries.values()] }
-            } else {
-              data[sid] = {
-                ts: Date.now(),
-                entries: [...entries.values()],
-                scroll: data[sid]?.scroll ?? 0,
-                expanded: data[sid]?.expanded ?? "",
-                children: data[sid]?.children ?? {},
-              }
-            }
-            saveSessionData(kv, data)
-          } catch {}
-          api.ui.toast(signals.lang() === "zh"
+          const ok = () => api.ui.toast(signals.lang() === "zh"
             ? `已标记 ${count} 个运行中的条目为完成`
             : `Marked ${count} running entries as done`)
+          const fail = () => {
+            try { api.ui.toast(t("clear.failed")) } catch {}
+          }
+          try {
+            const { parentSid, isChild } = resolveParent(sid)
+            const done = updateSessionData(kv, (data) => {
+              // 落定前先把（可能过期的）模块缓存与持久化记录
+              // merge：其他实例可能有本实例从未见过的条目，
+              // 这次写入不能把它们丢掉。
+              if (isChild) {
+                if (!data[parentSid]) data[parentSid] = { ts: Date.now(), entries: [], scroll: 0, expanded: "", children: {} }
+                if (!data[parentSid].children) data[parentSid].children = {}
+                const prev = data[parentSid].children[sid]?.entries ?? []
+                const merged = [...mergeSubEntries(prev, entries.values()).values()].map((e) =>
+                  e.status === "running" || e.status === "cancel_requested"
+                    ? { ...e, status: "done" as SubStatus, endedAt: e.endedAt ?? Date.now() }
+                    : e
+                )
+                data[parentSid].children[sid] = {
+                  ...(data[parentSid].children[sid] ?? { scroll: 0, expanded: "" }),
+                  entries: merged,
+                }
+              } else {
+                const rec = data[parentSid] ?? { ts: Date.now(), entries: [], scroll: 0, expanded: "", children: {} }
+                const merged = [...mergeSubEntries(rec.entries ?? [], entries.values()).values()].map((e) =>
+                  e.status === "running" || e.status === "cancel_requested"
+                    ? { ...e, status: "done" as SubStatus, endedAt: e.endedAt ?? Date.now() }
+                    : e
+                )
+                data[parentSid] = { ...rec, ts: Date.now(), entries: merged, children: rec.children ?? {} }
+              }
+            })
+            if (done && typeof (done as Promise<void>).then === "function") {
+              void (done as Promise<void>).then(ok, fail)
+            } else {
+              ok()
+            }
+          } catch {
+            fail()
+          }
         } else {
           api.ui.toast(signals.lang() === "zh" ? "没有需要清理的运行中条目" : "No running entries to clear")
         }
@@ -216,32 +350,42 @@ export function makeCommands(context: Context, api: PanelApi, signals: SharedSig
         })
         if (choice !== "yes") return
         try {
-          const data = loadSessionData(kv)
           let count = 0
-          if (parentID) {
-            if (data[parentID]?.children?.[sid]) {
-              const child = data[parentID].children[sid]
-              const ids = child.entries?.map((e) => e.id) ?? []
-              count = ids.length
-              child.entries = []
-              child.scroll = 0
-              child.expanded = ""
-              child.clearedIds = [...new Set([...(child.clearedIds ?? []), ...ids])]
-            }
-          } else {
-            count = data[sid]?.entries?.length ?? 0
-            if (data[sid]) {
-              const ids = data[sid].entries?.map((e) => e.id) ?? []
-              data[sid].entries = []
-              data[sid].scroll = 0
-              data[sid].expanded = ""
-              data[sid].clearedIds = [...new Set([...(data[sid].clearedIds ?? []), ...ids])]
-            }
+          const finish = () => {
+            globalEntryCache.delete(sid)
+            setClearTick((v) => v + 1)
+            api.ui.toast(t("clear.done", { n: count }))
           }
-          saveSessionData(kv, data)
-          globalEntryCache.delete(sid)
-          setClearTick((v) => v + 1)
-          api.ui.toast(t("clear.done", { n: count }))
+          const done = updateSessionData(kv, (data) => {
+            if (parentID) {
+              const child = data[parentID]?.children?.[sid]
+              if (child) {
+                const ids = child.entries?.map((e) => e.id) ?? []
+                count = ids.length
+                child.entries = []
+                child.scroll = 0
+                child.expanded = ""
+                child.clearedIds = [...new Set([...(child.clearedIds ?? []), ...ids])]
+              }
+            } else {
+              const rec = data[sid]
+              if (rec) {
+                const ids = rec.entries?.map((e) => e.id) ?? []
+                count = ids.length
+                rec.entries = []
+                rec.scroll = 0
+                rec.expanded = ""
+                rec.clearedIds = [...new Set([...(rec.clearedIds ?? []), ...ids])]
+              }
+            }
+          })
+          if (done && typeof (done as Promise<void>).then === "function") {
+            void (done as Promise<void>).then(finish, () => {
+              try { api.ui.toast(t("clear.failed")) } catch {}
+            })
+          } else {
+            finish()
+          }
         } catch {}
       },
     },

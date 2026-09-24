@@ -57,7 +57,12 @@ Interested in token cache visualization? Check out [opencode-visual-cache](https
 - **Manual Entry Clear**: `/subagent-clear-entries` removes all records for the current session and prevents scan re-creation of historical entries
 - **Language Support**: Runtime language switch via `/subagent-lang` (Chinese / English), preference persisted
 - **Toggleable Border**: `/subagent-border` controls the panel border (hidden by default); when shown, it matches the cache stats panel style
-- **Slash Commands**: `/subagent-lang`, `/subagent-max`, `/subagent-order`, `/subagent-scroll`, `/subagent-ttl`, `/subagent-clear-entries`, `/subagent-session`, `/subagent-version`, `/subagent-clear-running`, `/subagent-border` for dynamic configuration
+- **Multi-instance Safe**: sidebar entries no longer overwrite each other when several TUIs are open (atomic merge writes)
+- **Missed-event Recovery**: periodic reconcile + history scan + discovery poll recover sub-agents whose events were dropped
+- **Entry Display Toggles**: `/subagent-cost` shows per-entry cost in the list (4 decimals, off by default; always shown when expanded); `/subagent-time` and `/subagent-tokens` toggle elapsed time and tokens (on by default)
+- **Configurable Time Format**: `/subagent-time-format` supports short (default), decimal, clock, compact, seconds
+- **Settings Menu**: `/subagent-sections` opens the native looping settings menu (V2); `/subagent-config` shows a settings summary
+- **Slash Commands**: `/subagent-lang`, `/subagent-max`, `/subagent-order`, `/subagent-scroll`, `/subagent-ttl`, `/subagent-clear-entries`, `/subagent-session`, `/subagent-version`, `/subagent-clear-running`, `/subagent-border`, `/subagent-config`, `/subagent-sections`, `/subagent-cost`, `/subagent-time`, `/subagent-tokens`, `/subagent-time-format` for dynamic configuration
 
 ---
 
@@ -116,6 +121,12 @@ The plugin supports dynamic configuration via slash commands or the command pale
 | `/subagent-version` | View plugin version | Displays the current plugin version |
 | `/subagent-clear-running` | Batch cleanup stuck entries | Marks all running entries as done in one click, cleaning up stale data |
 | `/subagent-border` | Toggle panel border | Show/hide the panel border (hidden by default) |
+| `/subagent-config` | Show settings summary | Popup listing current language, max entries, sort, scroll, retention, border and display toggles |
+| `/subagent-sections` | Open settings menu | Native select list; each change returns to the menu (Esc to close) |
+| `/subagent-cost` | Toggle entry cost | Per-entry cost in the list (4 decimals, off by default; always shown when expanded) |
+| `/subagent-time` | Toggle entry time | Elapsed time in the list (on by default) |
+| `/subagent-tokens` | Toggle entry tokens | Token count in the list (on by default) |
+| `/subagent-time-format` | Set time format | short (default, 45.32s / 112m35s) / decimal / clock / compact / seconds |
 
 <div align="center">
   <img src="https://raw.githubusercontent.com/Hotakus/opencode-subagent-magazine/master/assets/slash_cmds.png" alt="Slash Commands" width="49%"></img>

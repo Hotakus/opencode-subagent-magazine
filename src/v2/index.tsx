@@ -7,22 +7,31 @@ import { makeCommands } from "./commands"
 import { mapTheme } from "./theme"
 import { SubAgentPanel } from "../panel/SubAgentPanel"
 import type { PanelApi } from "../panel/panel-api"
-import type { Lang, SortOrder, ScrollMode, SharedSignals } from "../core/types"
+import type { Lang, SortOrder, ScrollMode, SharedSignals, TimeFormat } from "../core/types"
+import { TIME_FORMATS } from "../core/format"
 import { SETTING_KEYS } from "../core/kv"
 import { LANG_META, detectLang } from "../i18n"
 
-/** 面板根组件：keymap.layer 必须在组件渲染上下文注册（setup 内调用报
- *  Keymap.Provider missing），再渲染共享 SubAgentPanel。 */
+/** 命令层必须在 app 槽注册：侧栏隐藏（sidebar: auto）时命令仍需可用。 */
+function CommandRoot(props: {
+  context: Context
+  api: PanelApi
+  signals: SharedSignals
+}) {
+  props.context.keymap.layer(() => ({
+    mode: "global" as const,
+    commands: makeCommands(props.context, props.api, props.signals),
+  }))
+  return null
+}
+
+/** 面板根组件：渲染共享 SubAgentPanel（命令层见 CommandRoot）。 */
 function PluginRoot(props: {
   context: Context
   api: PanelApi
   signals: SharedSignals
   sessionID: string
 }) {
-  props.context.keymap.layer(() => ({
-    mode: "global" as const,
-    commands: makeCommands(props.context, props.api, props.signals),
-  }))
   return (
     <SubAgentPanel
       api={props.api}
@@ -32,6 +41,10 @@ function PluginRoot(props: {
       sortOrder={props.signals.sortOrder}
       scrollMode={props.signals.scrollMode}
       borderVisible={props.signals.borderVisible}
+      showEntryCost={props.signals.showEntryCost}
+      showEntryTime={props.signals.showEntryTime}
+      showEntryTokens={props.signals.showEntryTokens}
+      timeFormat={props.signals.timeFormat}
       sessionId={props.sessionID}
     />
   )
@@ -69,16 +82,45 @@ const mod: PluginModule & { server: () => Promise<Record<string, never>> } = {
     const [borderSignal, setBorderVisible] = createSignal<boolean>(
       (api.kv.get(SETTING_KEYS.border, false) as boolean) === true,
     )
+    const [showEntryCostSignal, setShowEntryCost] = createSignal<boolean>(
+      (api.kv.get(SETTING_KEYS.showEntryCost, false) as boolean) === true,
+    )
+    const [showEntryTimeSignal, setShowEntryTime] = createSignal<boolean>(
+      (api.kv.get(SETTING_KEYS.showEntryTime, true) as boolean) !== false,
+    )
+    const [showEntryTokensSignal, setShowEntryTokens] = createSignal<boolean>(
+      (api.kv.get(SETTING_KEYS.showEntryTokens, true) as boolean) !== false,
+    )
+    const storedTimeFormat = String(api.kv.get(SETTING_KEYS.timeFormat, "short"))
+    const [timeFormatSignal, setTimeFormat] = createSignal<TimeFormat>(
+      (TIME_FORMATS as readonly string[]).includes(storedTimeFormat) ? (storedTimeFormat as TimeFormat) : "short",
+    )
+    const [dbSyncSignal, setDbSync] = createSignal<boolean>(
+      (api.kv.get(SETTING_KEYS.dbSync, true) as boolean) !== false,
+    )
     lang = langSignal
     maxEntries = maxSignal
     sortOrder = orderSignal
     scrollMode = scrollSignal
 
     const signals: SharedSignals = {
-      lang, setLang, maxEntries, setMaxEntries, sortOrder, setSortOrder, scrollMode, setScrollMode, borderVisible: borderSignal, setBorderVisible, sessionId: "",
+      lang, setLang, maxEntries, setMaxEntries, sortOrder, setSortOrder, scrollMode, setScrollMode, borderVisible: borderSignal, setBorderVisible,
+      showEntryCost: showEntryCostSignal, setShowEntryCost,
+      showEntryTime: showEntryTimeSignal, setShowEntryTime,
+      showEntryTokens: showEntryTokensSignal, setShowEntryTokens,
+      timeFormat: timeFormatSignal, setTimeFormat,
+      dbSync: dbSyncSignal, setDbSync,
+      sessionId: "",
     }
 
-    // 命令 layer（组件内注册——见 PluginRoot）
+    // 命令层挂 app 槽：侧栏隐藏时斜杠命令仍需可用（见 CommandRoot）
+    context.ui.slot({
+      append: "app",
+      render: () => (
+        <CommandRoot context={context} api={api} signals={signals} />
+      ),
+    })
+
     // 侧边栏面板（共享 SubAgentPanel——V1/V2 同一组件）
     context.ui.slot({
       prepend: "sidebar.content",

@@ -51,6 +51,14 @@ export interface PanelApi {
     messages(sid: string): unknown[] | undefined
     /** Raw parts of a message (scan). */
     part(messageID: string): unknown[] | undefined
+    /** Optional host-side fallback: map a subagent tool call to its child session
+     *  when live events/history lack the link (V2 reads the local database). */
+    resolveChild?(input: {
+      parentId: string
+      callId?: string
+      agent?: string
+      startedAt?: number
+    }): string | undefined
   }
   event: {
     on(type: PanelEventType, cb: (e: PanelEvent) => void): () => void
