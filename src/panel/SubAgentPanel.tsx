@@ -63,6 +63,7 @@ export function SubAgentPanel(props: {
   showEntryTime: () => boolean
   showEntryTokens: () => boolean
   timeFormat: () => TimeFormat
+  showOrigin: () => boolean
   sessionId: string
 }): JSX.Element {
   const t = createT(() => props.lang())
@@ -1591,8 +1592,11 @@ export function SubAgentPanel(props: {
                   ? fmtDuration(elapsed(), isActiveRunning, props.timeFormat())
                   : ""
               // 来源标记：⇢ = 后台衍生（工具输入 background），↳ = 衍生会话（spawn）。
-              const originMark = () =>
-                entry.origin === "sub" ? "\u21b3" : entry.background === true ? "\u21e2" : ""
+              const originMark = () => {
+                if (!props.showOrigin()) return ""
+                if (entry.origin === "sub") return "\u21b3"
+                return entry.background === true ? "\u21e2" : ""
+              }
               const originW = () => (originMark() ? 2 : 0)
               const suffixW = () => {
                 let w = 0
@@ -1647,15 +1651,17 @@ export function SubAgentPanel(props: {
                       <span style={{ fg: pal().muted }}>{" ".repeat(expandedPad(t("agent.label")))}</span>
                       <span style={{ fg: pal().muted }}>{entry.agent}</span>
                     </text>
-                    <text>
-                      {"  "}
-                      <span style={{ fg: pal().primary }}>{t("origin.label")}: </span>
-                      <span style={{ fg: pal().muted }}>{" ".repeat(expandedPad(t("origin.label")))}</span>
-                      <span style={{ fg: pal().muted }}>
-                        {entry.origin === "sub" ? t("origin.sub") : t("origin.tool")}
-                        {entry.background === true ? ` (${t("origin.background")})` : ""}
-                      </span>
-                    </text>
+                    <Show when={props.showOrigin()}>
+                      <text>
+                        {"  "}
+                        <span style={{ fg: pal().primary }}>{t("origin.label")}: </span>
+                        <span style={{ fg: pal().muted }}>{" ".repeat(expandedPad(t("origin.label")))}</span>
+                        <span style={{ fg: pal().muted }}>
+                          {entry.origin === "sub" ? t("origin.sub") : t("origin.tool")}
+                          {entry.background === true ? ` (${t("origin.background")})` : ""}
+                        </span>
+                      </text>
+                    </Show>
                     <text>
                       {"  "}
                       <span style={{ fg: pal().primary }}>{t("status.label")}: </span>

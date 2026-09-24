@@ -77,6 +77,8 @@ export interface SharedSignals {
   setShowEntryTokens: (v: boolean) => void
   timeFormat: () => TimeFormat
   setTimeFormat: (f: TimeFormat) => void
+  showOrigin: () => boolean
+  setShowOrigin: (v: boolean) => void
   dbSync: () => boolean
   setDbSync: (v: boolean) => void
   sessionId: string
