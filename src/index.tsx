@@ -81,7 +81,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
     (TIME_FORMATS as readonly string[]).includes(storedTimeFormat) ? (storedTimeFormat as TimeFormat) : "short"
   )
   const [showOrigin, setShowOrigin] = createSignal<boolean>(
-    (api.kv.get(`${KV_PREFIX}.show_origin`, true) as boolean) !== false
+    (api.kv.get(`${KV_PREFIX}.show_origin`, false) as boolean) === true
   )
   const [dbSync, setDbSync] = createSignal<boolean>(
     (api.kv.get(`${KV_PREFIX}.db_sync`, true) as boolean) !== false
@@ -564,7 +564,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       slash: { name: "subagent-origin" },
       onSelect: (dialog) => {
         const t = createT(() => signals.lang())
-        const cur = Boolean(api.kv.get(`${KV_PREFIX}.show_origin`, true))
+        const cur = Boolean(api.kv.get(`${KV_PREFIX}.show_origin`, false))
         api.kv.set(`${KV_PREFIX}.show_origin`, !cur)
         signals.setShowOrigin(!cur)
         api.ui.toast({

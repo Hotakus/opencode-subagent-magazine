@@ -97,7 +97,7 @@ const mod: PluginModule & { server: () => Promise<Record<string, never>> } = {
       (TIME_FORMATS as readonly string[]).includes(storedTimeFormat) ? (storedTimeFormat as TimeFormat) : "short",
     )
     const [showOriginSignal, setShowOrigin] = createSignal<boolean>(
-      (api.kv.get(SETTING_KEYS.showOrigin, true) as boolean) !== false,
+      (api.kv.get(SETTING_KEYS.showOrigin, false) as boolean) === true,
     )
     const [dbSyncSignal, setDbSync] = createSignal<boolean>(
       (api.kv.get(SETTING_KEYS.dbSync, true) as boolean) !== false,
