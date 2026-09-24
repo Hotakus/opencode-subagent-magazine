@@ -24,6 +24,13 @@ test("modelIdOf accepts both string and object model shapes", () => {
   assert.equal(modelIdOf(undefined), undefined)
 })
 
+test("modelIdOf extracts the id from serialized JSON (session_v2.model)", () => {
+  assert.equal(modelIdOf('{"id":"deepseek-flash","providerID":"deepseek"}'), "deepseek-flash")
+  assert.equal(modelIdOf('  {"id":"gpt-5.6-luna"}  '), "gpt-5.6-luna")
+  assert.equal(modelIdOf("{broken json"), undefined)
+  assert.equal(modelIdOf('{"providerID":"deepseek"}'), undefined)
+})
+
 test("findDbPath honours OPENCODE_DB and XDG_DATA_HOME", () => {
   assert.equal(findDbPath({ OPENCODE_DB: "/tmp/custom.db" }, "/home/x"), "/tmp/custom.db")
   assert.equal(findDbPath({ XDG_DATA_HOME: "/data" }, "/home/x"), "/data/opencode/opencode.db")

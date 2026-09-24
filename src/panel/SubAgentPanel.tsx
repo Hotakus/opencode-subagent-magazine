@@ -45,7 +45,10 @@ function partMetadata(
 
 /** model 字段的有效值——历史 KV 里可能混入 "[object Object]" 这类序列化垃圾。 */
 function validModel(model: string | undefined): model is string {
-  return typeof model === "string" && model.length > 0 && model !== "[object Object]"
+  if (typeof model !== "string") return false
+  const s = model.trim()
+  // 历史脏值：String(对象) 与未解析的 JSON 文本（session_v2.model 的形态）。
+  return s.length > 0 && s !== "[object Object]" && !s.startsWith("{")
 }
 
 export function SubAgentPanel(props: {

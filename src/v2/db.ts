@@ -52,12 +52,25 @@ interface SqlDatabase {
 // 打包产物保留运行时 import；Node（CI 测试）加载失败会静默禁用。
 const BUN_SQLITE = "bun:sqlite"
 
-/** 从宿主 model 字段（字符串或 { id } 对象）提取模型 id。 */
+/** 从宿主 model 字段提取模型 id。
+ *  兼容三种形态：名字字符串、{ id } 对象，以及序列化后的 JSON 字符串
+ *  （session_v2.model 列存的就是 `{"id":...}` 文本）。 */
 export function modelIdOf(value: unknown): string | undefined {
-  if (typeof value === "string") return value.length > 0 ? value : undefined
+  if (typeof value === "string") {
+    const s = value.trim()
+    if (s.length === 0) return undefined
+    if (s.startsWith("{")) {
+      try { return modelIdOf(JSON.parse(s)) } catch { return undefined }
+    }
+    return s
+  }
   if (value && typeof value === "object") {
     const id = (value as { id?: unknown }).id
-    if (id !== undefined) return String(id)
+    if (id === undefined) return undefined
+    const direct = modelIdOf(id)
+    if (direct !== undefined) return direct
+    const s = String(id)
+    return s.length > 0 ? s : undefined
   }
   return undefined
 }

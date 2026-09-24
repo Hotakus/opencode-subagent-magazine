@@ -1,7 +1,7 @@
 import type { Context } from "./types"
 import type { PanelApi, PanelEvent, PanelEventType } from "../panel/panel-api"
 import { SETTING_KEYS } from "../core/kv"
-import { createSessionDbIndex, statusOfChild } from "./db"
+import { createSessionDbIndex, modelIdOf, statusOfChild } from "./db"
 
 const SUBAGENT_TOOL_V2 = "subagent"
 
@@ -15,16 +15,6 @@ function normalizeMeta(meta: unknown): Record<string, unknown> {
     if (m.sessionId === undefined) m.sessionId = m.sessionID
   }
   return m
-}
-
-/** 从 host 的 model 字段（字符串或 { id } 对象）提取模型 id。 */
-function modelIdOf(value: unknown): string | undefined {
-  if (typeof value === "string") return value
-  if (value && typeof value === "object") {
-    const id = (value as { id?: unknown }).id
-    if (id !== undefined) return String(id)
-  }
-  return undefined
 }
 
 /** V2 content part → V1 Part 形状（scan 的 part() 消费）。 */
