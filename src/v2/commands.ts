@@ -1,16 +1,24 @@
 import type { Context, KeymapCommand } from "./types"
 import type { PanelApi } from "../panel/panel-api"
-import type { Lang, SharedSignals, SubStatus } from "../core/types"
-import { KV_PREFIX, SETTING_KEYS, loadSessionData, saveSessionData, readTTLDays } from "../core/kv"
+import type { Lang, SharedSignals, SubStatus, TimeFormat } from "../core/types"
+import { TIME_FORMATS, TIME_FORMAT_SAMPLES } from "../core/format"
+import { KV_PREFIX, SETTING_KEYS, updateSessionData, readTTLDays } from "../core/kv"
 import { PLUGIN_VERSION } from "../_version"
 import { LANG_META, createT } from "../i18n"
 import { globalEntryCache, setClearTick } from "../panel/store"
+import { mergeSubEntries } from "../panel/entry-map"
+import { openSettingsMenu } from "./settings-menu"
 
 /** V2 命令（对齐 V1 的 9 个斜杠命令——promise 式对话框）。 */
-export function makeCommands(context: Context, api: PanelApi, signals: SharedSignals): KeymapCommand[] {
+export function makeCommands(
+  context: Context,
+  api: PanelApi,
+  signals: SharedSignals,
+): KeymapCommand[] {
   const t = createT(() => signals.lang())
   const kv = api.kv
   const clampMax = (n: number) => Math.max(1, Math.min(50, n))
+  const onOff = (v: boolean) => (v ? t("settings.on") : t("settings.off"))
 
   const resolveParent = (sid: string): { parentSid: string; isChild: boolean } => {
     try {
@@ -96,6 +104,97 @@ export function makeCommands(context: Context, api: PanelApi, signals: SharedSig
         signals.setMaxEntries(n)
         kv.set(SETTING_KEYS.maxEntries, n)
         api.ui.toast(`Max entries: ${n}`)
+      },
+    },
+    {
+      id: "opencode-subagent-magazine.subagent.config",
+      title: "SubAgent Magazine: Settings",
+      description: "Show current settings (change each via its own command)",
+      slash: { name: "subagent-config" },
+      palette: true,
+      run: () => {
+        const ttl = readTTLDays(kv)
+        const langLabel = LANG_META.find((m) => m.code === signals.lang())?.label ?? signals.lang()
+        const message = [
+          `${t("settings.lang")}: ${langLabel}`,
+          `${t("settings.max")}: ${signals.maxEntries()}`,
+          `${t("settings.order")}: ${signals.sortOrder() === "desc" ? t("order.desc") : t("order.asc")}`,
+          `${t("settings.scroll")}: ${signals.scrollMode() === "wheel" ? t("scroll.wheel") : t("scroll.click")}`,
+          `${t("settings.ttl")}: ${ttl === 0 ? t("ttl.unlimited") : `${ttl}d`}`,
+          `${t("settings.border")}: ${onOff(signals.borderVisible())}`,
+          `${t("settings.showEntryCost")}: ${onOff(signals.showEntryCost())}`,
+          `${t("settings.showEntryTime")}: ${onOff(signals.showEntryTime())}`,
+          `${t("settings.showEntryTokens")}: ${onOff(signals.showEntryTokens())}`,
+          `${t("settings.timeFormat")}: ${TIME_FORMAT_SAMPLES[signals.timeFormat()]}`,
+        ].join("\n")
+        context.ui.toast.show({ title: t("settings.title"), message })
+      },
+    },
+    {
+      id: "opencode-subagent-magazine.subagent.sections",
+      title: "SubAgent Magazine: Settings Menu",
+      description: "Open the interactive settings menu (Esc to close)",
+      slash: { name: "subagent-sections" },
+      palette: true,
+      run: () => {
+        openSettingsMenu(context, api, signals)
+      },
+    },
+    {
+      id: "opencode-subagent-magazine.subagent.cost",
+      title: "SubAgent Magazine: Toggle Entry Cost",
+      description: "Show or hide the per-sub-agent cost in the sidebar",
+      slash: { name: "subagent-cost" },
+      palette: true,
+      run: () => {
+        const v = !signals.showEntryCost()
+        signals.setShowEntryCost(v)
+        kv.set(SETTING_KEYS.showEntryCost, v)
+        api.ui.toast(`${t("settings.showEntryCost")}: ${onOff(v)}`)
+      },
+    },
+    {
+      id: "opencode-subagent-magazine.subagent.time",
+      title: "SubAgent Magazine: Toggle Entry Time",
+      description: "Show or hide the elapsed time in the sidebar list",
+      slash: { name: "subagent-time" },
+      palette: true,
+      run: () => {
+        const v = !signals.showEntryTime()
+        signals.setShowEntryTime(v)
+        kv.set(SETTING_KEYS.showEntryTime, v)
+        api.ui.toast(`${t("settings.showEntryTime")}: ${onOff(v)}`)
+      },
+    },
+    {
+      id: "opencode-subagent-magazine.subagent.time-format",
+      title: "SubAgent Magazine: Time Format",
+      description: "Set how elapsed time is displayed (short / decimal / clock / compact / seconds)",
+      slash: { name: "subagent-time-format" },
+      palette: true,
+      run: async () => {
+        const picked = await context.ui.dialog.select<TimeFormat>({
+          title: t("settings.timeFormat"),
+          options: TIME_FORMATS.map((f) => ({ title: `${f} — ${TIME_FORMAT_SAMPLES[f]}`, value: f })),
+          current: signals.timeFormat(),
+        })
+        if (!picked) return
+        signals.setTimeFormat(picked)
+        kv.set(SETTING_KEYS.timeFormat, picked)
+        api.ui.toast(`${t("settings.timeFormat")}: ${TIME_FORMAT_SAMPLES[picked]}`)
+      },
+    },
+    {
+      id: "opencode-subagent-magazine.subagent.tokens",
+      title: "SubAgent Magazine: Toggle Entry Tokens",
+      description: "Show or hide the token count in the sidebar list",
+      slash: { name: "subagent-tokens" },
+      palette: true,
+      run: () => {
+        const v = !signals.showEntryTokens()
+        signals.setShowEntryTokens(v)
+        kv.set(SETTING_KEYS.showEntryTokens, v)
+        api.ui.toast(`${t("settings.showEntryTokens")}: ${onOff(v)}`)
       },
     },
     {

@@ -154,7 +154,9 @@ export interface Context {
     }
   }
   readonly keymap: {
-    layer(input: () => { readonly commands?: readonly KeymapCommand[] }): void
+    layer(input: () => {
+      readonly commands?: readonly KeymapCommand[]
+    }): void
     shortcuts(id: string): readonly string[]
   }
 }

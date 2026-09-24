@@ -14,15 +14,15 @@ import {
 import { PLUGIN_VERSION } from "../_version"
 import { copyText } from "../clipboard"
 import { createT } from "../i18n"
-import type { Lang, SortOrder, ScrollMode, SubEntry, SubStatus, SessionRecord } from "../core/types"
+import type { Lang, SortOrder, ScrollMode, SubEntry, SubStatus, SessionRecord, TimeFormat } from "../core/types"
 import { SUBAGENT_TOOLS } from "../core/types"
-import { visualWidth, truncate, fmtDurationShort, fmtTokens, safeErrorMsg } from "../core/format"
+import { visualWidth, truncate, fmtDuration, fmtTokens, safeErrorMsg } from "../core/format"
 import { rgb, desaturateTo, dimColor, FALLBACK, MAX_SAT } from "../core/color"
-import { KV_PREFIX } from "../core/kv"
+import { KV_PREFIX, updateSessionData } from "../core/kv"
 import type { PanelApi, PanelEvent } from "./panel-api"
 import { globalEntryCache, clearTick } from "./store"
 import { isDirectChildSession } from "./session-routing"
-import { findSubEntryKey, upsertSubEntry } from "./entry-map"
+import { findSubEntryKey, mergeSubEntries, upsertSubEntry } from "./entry-map"
 
 /** Entry line left prefix: icon + space + status dot + space */
 const LEFT_PAD = 4
@@ -51,6 +51,10 @@ export function SubAgentPanel(props: {
   sortOrder: () => SortOrder
   scrollMode: () => ScrollMode
   borderVisible: () => boolean
+  showEntryCost: () => boolean
+  showEntryTime: () => boolean
+  showEntryTokens: () => boolean
+  timeFormat: () => TimeFormat
   sessionId: string
 }): JSX.Element {
   const t = createT(() => props.lang())
@@ -1473,12 +1477,16 @@ export function SubAgentPanel(props: {
 
               // Entry label: collapsed shows title only, expanded shows title only too
               const tokenText = () =>
-                !isExpanded() && entry.tokens !== undefined && entry.tokens > 0
+                !isExpanded() && props.showEntryTokens() && entry.tokens !== undefined && entry.tokens > 0
                   ? ` ${fmtTokens(entry.tokens!)}`
                   : ""
+              const costText = () =>
+                !isExpanded() && props.showEntryCost() && entry.cost !== undefined && entry.cost > 0
+                  ? ` $${entry.cost.toFixed(4)}`
+                  : ""
               const timeText = () =>
-                !isExpanded() && (elapsed() >= 2000 || entry.endedAt !== undefined)
-                  ? fmtDurationShort(elapsed(), isActiveRunning)
+                !isExpanded() && props.showEntryTime() && (elapsed() >= 2000 || entry.endedAt !== undefined)
+                  ? fmtDuration(elapsed(), isActiveRunning, props.timeFormat())
                   : ""
               const suffixW = () => {
                 let w = 0
@@ -1486,6 +1494,8 @@ export function SubAgentPanel(props: {
                 if (t) w += 1 + visualWidth(t)
                 const tk = tokenText()
                 if (tk) w += visualWidth(tk)
+                const c = costText()
+                if (c) w += visualWidth(c)
                 return w
               }
               const labelAvail = () => Math.max(6, panelWidth() - gutter() - LEFT_PAD - suffixW())
@@ -1517,6 +1527,9 @@ export function SubAgentPanel(props: {
                     {tokenText() ? (
                       <span style={{ fg: pal().muted }}>{tokenText()}</span>
                     ) : null}
+                    {costText() ? (
+                      <span style={{ fg: pal().warning }}>{costText()}</span>
+                    ) : null}
                   </text>
 
                   {/* expanded detail — right-aligned values */}
@@ -1541,7 +1554,7 @@ export function SubAgentPanel(props: {
                         <span style={{ fg: pal().primary }}>{t("time.label")}: </span>
                         <span style={{ fg: pal().muted }}>{" ".repeat(expandedPad(t("time.label")))}</span>
                         <span style={{ fg: pal().muted }}>
-                          {fmtDurationShort(elapsed(), isActiveRunning)}
+                          {fmtDuration(elapsed(), isActiveRunning, props.timeFormat())}
                         </span>
                       </text>
                     </Show>
