@@ -15,7 +15,6 @@
   },
   "files": [
     "dist",
-    "src",
     "tui",
     "install.mjs",
     "README.md"
@@ -24,12 +23,12 @@
     "opencode-subagent-magazine": "install.mjs"
   },
   "scripts": {
-    "build": "tsc && node build.tui.mjs",
+    "build": "tsc --emitDeclarationOnly && node build.tui.mjs",
     "build:tui": "node build.tui.mjs",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
     "version": "node -e \"require('fs').writeFileSync('src/_version.ts','// auto-generated\\nexport const PLUGIN_VERSION='+JSON.stringify(require('./package.json').version)+';\\n')\"",
-    "prepublishOnly": "tsc"
+    "prepublishOnly": "tsc --noEmit"
   },
   "keywords": [
     "opencode",
@@ -53,6 +52,18 @@
   },
   "peerDependenciesMeta": {
     "@opencode/plugin": {
+      "optional": true
+    },
+    "@opencode-ai/plugin": {
+      "optional": true
+    },
+    "@opencode-ai/sdk": {
+      "optional": true
+    },
+    "@opentui/core": {
+      "optional": true
+    },
+    "@opentui/solid": {
       "optional": true
     }
   },
