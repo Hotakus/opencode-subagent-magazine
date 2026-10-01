@@ -115,23 +115,56 @@ export function mergeSubEntries(
   return out
 }
 
+/** 持久化保留的 prompt 前缀长度。prompt 只用于生成 title，不参与渲染；
+ *  写入前截断，避免单条 10KB+ 的提示词把 KV 撑大（实测存量 prompt 占 2.9MB/4.4MB）。 */
+export const PERSISTED_PROMPT_MAX = 128
+
+/** 压缩条目载荷（当前仅截断 prompt）。已达标时原样返回，避免无谓复制。 */
+export function compactSubEntry(entry: SubEntry): SubEntry {
+  const prompt = entry.prompt ?? ""
+  if (prompt.length <= PERSISTED_PROMPT_MAX) return entry
+  return { ...entry, prompt: prompt.slice(0, PERSISTED_PROMPT_MAX) }
+}
+
 /**
- * `mergeSubEntries` 的变体：合并前先剔除 id 已进入 `clearedIds`
- * 的条目（`/subagent-clear-entries` 的手动清除名单）。
- *
- * 用于所有持久化写入路径：即使某个 TUI 实例（或延迟触发的
- * debounce 写入）持有清除前的过期快照，已清除条目也不会被
- * 合并回 KV——清除名单是持久化层的权威。
+ * 持久化合并——所有 KV 写入路径的唯一入口：
+ * 1. 剔除 id 已进入 `clearedIds` 的条目（手动清除名单是持久化层权威，
+ *    过期快照/debounce 写入都不得把它们合并回去）；
+ * 2. 压缩载荷（prompt 截断），base 里的存量胖数据也顺带清理。
  */
-export function mergeSubEntriesExcludingCleared(
+export function mergeSubEntriesForPersist(
   base: Iterable<SubEntry>,
   incoming: Iterable<SubEntry>,
   clearedIds: readonly string[] | undefined,
 ): Map<string, SubEntry> {
   const cleared = new Set(clearedIds ?? [])
-  if (cleared.size === 0) return mergeSubEntries(base, incoming)
   const keep = (entry: SubEntry) => !cleared.has(entry.id)
-  return mergeSubEntries([...base].filter(keep), [...incoming].filter(keep))
+  return mergeSubEntries(
+    [...base].filter(keep).map(compactSubEntry),
+    [...incoming].filter(keep).map(compactSubEntry),
+  )
+}
+
+/**
+ * 从清除名单中筛出可安全移除的 id——它们不会再被扫描/轮询重建：
+ * - `tool:`：对应 part 已确认状态为 error（扫描从不为 error part 建条目）；
+ * - `sub:`：子会话已不在权威存活列表里（轮询只重建存活子会话）。
+ * `liveChildIds` 未提供（本地库不可用）时不碰 `sub:` id。
+ */
+export function prunableClearedIds(input: {
+  clearedIds: Iterable<string>
+  errorToolIds?: ReadonlySet<string>
+  liveChildIds?: ReadonlySet<string>
+}): string[] {
+  const out: string[] = []
+  for (const id of input.clearedIds) {
+    if (id.startsWith("tool:")) {
+      if (input.errorToolIds?.has(id)) out.push(id)
+    } else if (id.startsWith("sub:")) {
+      if (input.liveChildIds !== undefined && !input.liveChildIds.has(id.slice(4))) out.push(id)
+    }
+  }
+  return out
 }
 
 /**

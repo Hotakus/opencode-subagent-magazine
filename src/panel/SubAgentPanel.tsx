@@ -22,7 +22,7 @@ import { KV_PREFIX, updateSessionData } from "../core/kv"
 import type { PanelApi, PanelEvent } from "./panel-api"
 import { globalEntryCache, clearTick } from "./store"
 import { isDirectChildSession } from "./session-routing"
-import { findSubEntryKey, mergeSubEntries, mergeSubEntriesExcludingCleared, withoutClearedEntries, upsertSubEntry } from "./entry-map"
+import { compactSubEntry, findSubEntryKey, mergeSubEntriesForPersist, PERSISTED_PROMPT_MAX, prunableClearedIds, withoutClearedEntries, upsertSubEntry } from "./entry-map"
 
 /** Entry line left prefix: icon + space + status dot + space */
 const LEFT_PAD = 4
@@ -166,12 +166,12 @@ export function SubAgentPanel(props: {
             const parent = ensureRootRecord(data, parentSid)
             const child = ensureChildRecord(data, parentSid, sid)
             // 已被手动清除的条目永不回填（即使本快照来自清除前的旧状态）。
-            child.entries = [...mergeSubEntriesExcludingCleared(child.entries ?? [], entries.values(), child.clearedIds).values()]
+            child.entries = [...mergeSubEntriesForPersist(child.entries ?? [], entries.values(), child.clearedIds).values()]
             parent.ts = Date.now()
           } else {
             const rec = ensureRootRecord(data, sid)
             rec.ts = Date.now()
-            rec.entries = [...mergeSubEntriesExcludingCleared(rec.entries ?? [], entries.values(), rec.clearedIds).values()]
+            rec.entries = [...mergeSubEntriesForPersist(rec.entries ?? [], entries.values(), rec.clearedIds).values()]
           }
         })
       } catch {}
@@ -220,7 +220,58 @@ export function SubAgentPanel(props: {
     } catch {}
   }
 
+  /** 记录是否需要一次性压缩：prompt 超出上限，或条目仍在清除名单里（旧版残留）。 */
+  const recordNeedsCompaction = (rec: { entries?: SubEntry[]; clearedIds?: string[] }): boolean => {
+    const cleared = new Set(rec.clearedIds ?? [])
+    for (const entry of rec.entries ?? []) {
+      if ((entry.prompt ?? "").length > PERSISTED_PROMPT_MAX) return true
+      if (cleared.has(entry.id)) return true
+    }
+    return false
+  }
+
+  /** 存量数据一次性压缩：截断超长 prompt、剔除清除名单内的残留条目。
+   *  全部记录已达标时不写盘，避免每次挂载都重写大文件。 */
+  const compactStoredPayloads = () => {
+    try {
+      const data = loadSessionData()
+      let needed = false
+      for (const rec of Object.values(data)) {
+        if (recordNeedsCompaction(rec)) { needed = true; break }
+        for (const child of Object.values(rec.children ?? {})) {
+          if (recordNeedsCompaction(child)) { needed = true; break }
+        }
+        if (needed) break
+      }
+      if (!needed) return
+      mutateSessionData((latest) => {
+        for (const rec of Object.values(latest)) {
+          rec.entries = [...mergeSubEntriesForPersist(rec.entries ?? [], [], rec.clearedIds).values()]
+          for (const child of Object.values(rec.children ?? {})) {
+            child.entries = [...mergeSubEntriesForPersist(child.entries ?? [], [], child.clearedIds).values()]
+          }
+        }
+      })
+    } catch {}
+  }
+
   cleanupOldSessions()
+  compactStoredPayloads()
+
+  /** 从持久化记录的清除名单中移除可安全清理的 id（扫描/轮询已确认不会重建）。 */
+  const pruneClearedIds = (sid: string, ids: readonly string[]) => {
+    if (ids.length === 0) return
+    const remove = new Set(ids)
+    try {
+      mutateSessionData((data) => {
+        const { parentSid, isChild } = resolveParent(sid)
+        const rec = isChild ? data[parentSid]?.children?.[sid] : data[parentSid]
+        if (!rec?.clearedIds?.length) return
+        const next = rec.clearedIds.filter((id) => !remove.has(id))
+        if (next.length !== rec.clearedIds.length) rec.clearedIds = next
+      })
+    } catch {}
+  }
 
   const [entryMap, setEntryMapRaw] = createSignal(loadEntries(props.sessionId))
 
@@ -250,12 +301,12 @@ export function SubAgentPanel(props: {
             if (isChild) {
               const parent = ensureRootRecord(data, parentSid)
               const child = ensureChildRecord(data, parentSid, props.sessionId)
-              child.entries = [...mergeSubEntriesExcludingCleared(child.entries ?? [], next.values(), child.clearedIds).values()]
+              child.entries = [...mergeSubEntriesForPersist(child.entries ?? [], next.values(), child.clearedIds).values()]
               parent.ts = Date.now()
             } else {
               const rec = ensureRootRecord(data, props.sessionId)
               rec.ts = Date.now()
-              rec.entries = [...mergeSubEntriesExcludingCleared(rec.entries ?? [], next.values(), rec.clearedIds).values()]
+              rec.entries = [...mergeSubEntriesForPersist(rec.entries ?? [], next.values(), rec.clearedIds).values()]
             }
           })
         } catch {}
@@ -685,7 +736,7 @@ export function SubAgentPanel(props: {
                 latest[parentSid] = {
                   ...(latestRec ?? rec),
                   ts: nowTs,
-                  entries: [...mergeSubEntriesExcludingCleared(latestRec?.entries ?? [], fallbackMap.values(), latestRec?.clearedIds).values()],
+                  entries: [...mergeSubEntriesForPersist(latestRec?.entries ?? [], fallbackMap.values(), latestRec?.clearedIds).values()],
                 }
               })
             }
@@ -699,7 +750,7 @@ export function SubAgentPanel(props: {
             data[parentSid] = {
               ...(rec ?? { entries: [], scroll: 0, expanded: "", children: {}, ts: nowTs }),
               ts: nowTs,
-              entries: [...mergeSubEntriesExcludingCleared(rec?.entries ?? [], parentCache.values(), rec?.clearedIds).values()],
+              entries: [...mergeSubEntriesForPersist(rec?.entries ?? [], parentCache.values(), rec?.clearedIds).values()],
             }
           })
         }
@@ -797,6 +848,10 @@ export function SubAgentPanel(props: {
     let msgs: unknown[] | undefined
     try { msgs = props.api.session.messages(sid) } catch {}
     if (!msgs || (msgs as any[]).length === 0) return false
+    // 清除名单里、本次扫描确认状态为 error 的 tool id：error part 不会重建条目，
+    // 扫描结束后可安全从名单移除（见 prunableClearedIds）。
+    const seenErrorIds = new Set<string>()
+    let scanClearedIds = new Set<string>()
     // scan 结果先写入内存（setEntryMapRaw）；scan 末尾统一走 persistEntries 的 merge-safe 落盘。
     setEntryMapRaw((prev) => {
       // 从 KV 加载当前会话的清除名单：既用于跳过被手动清除的历史条目，
@@ -804,6 +859,7 @@ export function SubAgentPanel(props: {
       const { parentSid: scanPSid, isChild: scanChild } = resolveParent(sid)
       const scanRec = loadSessionData()[scanPSid]
       const clearedIds = new Set(scanChild ? scanRec?.children?.[sid]?.clearedIds : scanRec?.clearedIds)
+      scanClearedIds = clearedIds
       // 优先从模块级缓存加载，KV 仅作缓存未命中时的回退；
       // 已清除条目一律丢弃，防止过期缓存让它们继续存活。
       const next = withoutClearedEntries(
@@ -843,8 +899,12 @@ export function SubAgentPanel(props: {
               const existingKey = findSubEntryKey(next, id, scanSubSid)
               const exists = existingKey ? next.get(existingKey) : undefined
 
-              // 已手动清除的条目：scan 发现但不在内存 → 跳过重建
-              if (!exists && clearedIds.has(id)) continue
+              // 已手动清除的条目：scan 发现但不在内存 → 跳过重建。
+              // error part 永远不会重建条目——顺手记入可清理名单。
+              if (!exists && clearedIds.has(id)) {
+                if (rawStatus === "error") seenErrorIds.add(id)
+                continue
+              }
 
               // Only create entries for tool calls that entered execution.
               // "pending" / empty: skip new entries; allow heuristics for existing ones below.
@@ -960,6 +1020,22 @@ export function SubAgentPanel(props: {
       // 扫描后为空（手动清除或全部条目被剔除）：同步清空模块缓存，
       // 避免其他视图/下次 replace 扫描把旧条目捞回来。
       globalEntryCache.set(sid, new Map(snapshot))
+    }
+    // 安全清理清除名单：error part 不会重建条目；本地库已不存在的子会话
+    // 不会出现在轮询里。仅当本轮扫描确实读取了名单才尝试，且只删可证明
+    // 不会再重建的 id（保守策略，避免复活已清除条目）。
+    if (scanClearedIds.size > 0) {
+      let liveChildIds: Set<string> | undefined
+      try {
+        const children = props.api.session.listChildren?.(sid)
+        if (children) liveChildIds = new Set(children.map((c) => c.id).filter((id): id is string => Boolean(id)))
+      } catch {}
+      const prunable = prunableClearedIds({
+        clearedIds: scanClearedIds,
+        errorToolIds: seenErrorIds,
+        liveChildIds,
+      })
+      if (prunable.length > 0) pruneClearedIds(sid, prunable)
     }
     return true
   }
