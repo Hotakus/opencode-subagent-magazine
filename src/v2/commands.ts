@@ -6,7 +6,7 @@ import { KV_PREFIX, SETTING_KEYS, updateSessionData, readTTLDays } from "../core
 import { PLUGIN_VERSION } from "../_version"
 import { LANG_META, createT } from "../i18n"
 import { globalEntryCache, setClearTick } from "../panel/store"
-import { mergeSubEntries } from "../panel/entry-map"
+import { mergeSubEntriesExcludingCleared } from "../panel/entry-map"
 import { openSettingsMenu } from "./settings-menu"
 
 /** V2 命令（对齐 V1 的 9 个斜杠命令——promise 式对话框）。 */
@@ -283,7 +283,8 @@ export function makeCommands(
                 if (!data[parentSid]) data[parentSid] = { ts: Date.now(), entries: [], scroll: 0, expanded: "", children: {} }
                 if (!data[parentSid].children) data[parentSid].children = {}
                 const prev = data[parentSid].children[sid]?.entries ?? []
-                const merged = [...mergeSubEntries(prev, entries.values()).values()].map((e) =>
+                // 已手动清除的条目不得因缓存合并而回填。
+                const merged = [...mergeSubEntriesExcludingCleared(prev, entries.values(), data[parentSid].children[sid]?.clearedIds).values()].map((e) =>
                   e.status === "running" || e.status === "cancel_requested"
                     ? { ...e, status: "done" as SubStatus, endedAt: e.endedAt ?? Date.now() }
                     : e
@@ -294,7 +295,7 @@ export function makeCommands(
                 }
               } else {
                 const rec = data[parentSid] ?? { ts: Date.now(), entries: [], scroll: 0, expanded: "", children: {} }
-                const merged = [...mergeSubEntries(rec.entries ?? [], entries.values()).values()].map((e) =>
+                const merged = [...mergeSubEntriesExcludingCleared(rec.entries ?? [], entries.values(), rec.clearedIds).values()].map((e) =>
                   e.status === "running" || e.status === "cancel_requested"
                     ? { ...e, status: "done" as SubStatus, endedAt: e.endedAt ?? Date.now() }
                     : e
@@ -363,6 +364,9 @@ export function makeCommands(
           ],
         })
         if (choice !== "yes") return
+        // 内存缓存可能含尚未落盘的条目——一并计入清除名单，
+        // 防止它们随后被 merge 回 KV（见 SubAgentPanel 的持久化过滤）。
+        const cachedIds = [...(globalEntryCache.get(sid)?.values() ?? [])].map((e) => e.id)
         try {
           let count = 0
           const finish = () => {
@@ -372,9 +376,12 @@ export function makeCommands(
           }
           const done = updateSessionData(kv, (data) => {
             if (parentID) {
-              const child = data[parentID]?.children?.[sid]
-              if (child) {
-                const ids = child.entries?.map((e) => e.id) ?? []
+              const parent = data[parentID]
+              if (parent?.children?.[sid] || cachedIds.length > 0) {
+                const parentRec = parent ?? (data[parentID] = { ts: Date.now(), entries: [], scroll: 0, expanded: "", children: {} })
+                if (!parentRec.children) parentRec.children = {}
+                const child = parentRec.children[sid] ?? (parentRec.children[sid] = { scroll: 0, expanded: "", entries: [] })
+                const ids = [...new Set([...(child.entries ?? []).map((e) => e.id), ...cachedIds])]
                 count = ids.length
                 child.entries = []
                 child.scroll = 0
@@ -383,13 +390,14 @@ export function makeCommands(
               }
             } else {
               const rec = data[sid]
-              if (rec) {
-                const ids = rec.entries?.map((e) => e.id) ?? []
+              if (rec || cachedIds.length > 0) {
+                const target = rec ?? (data[sid] = { ts: Date.now(), entries: [], scroll: 0, expanded: "", children: {} })
+                const ids = [...new Set([...(target.entries ?? []).map((e) => e.id), ...cachedIds])]
                 count = ids.length
-                rec.entries = []
-                rec.scroll = 0
-                rec.expanded = ""
-                rec.clearedIds = [...new Set([...(rec.clearedIds ?? []), ...ids])]
+                target.entries = []
+                target.scroll = 0
+                target.expanded = ""
+                target.clearedIds = [...new Set([...(target.clearedIds ?? []), ...ids])]
               }
             }
           })

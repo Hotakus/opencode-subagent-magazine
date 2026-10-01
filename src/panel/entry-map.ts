@@ -114,3 +114,39 @@ export function mergeSubEntries(
   }
   return out
 }
+
+/**
+ * `mergeSubEntries` 的变体：合并前先剔除 id 已进入 `clearedIds`
+ * 的条目（`/subagent-clear-entries` 的手动清除名单）。
+ *
+ * 用于所有持久化写入路径：即使某个 TUI 实例（或延迟触发的
+ * debounce 写入）持有清除前的过期快照，已清除条目也不会被
+ * 合并回 KV——清除名单是持久化层的权威。
+ */
+export function mergeSubEntriesExcludingCleared(
+  base: Iterable<SubEntry>,
+  incoming: Iterable<SubEntry>,
+  clearedIds: readonly string[] | undefined,
+): Map<string, SubEntry> {
+  const cleared = new Set(clearedIds ?? [])
+  if (cleared.size === 0) return mergeSubEntries(base, incoming)
+  const keep = (entry: SubEntry) => !cleared.has(entry.id)
+  return mergeSubEntries([...base].filter(keep), [...incoming].filter(keep))
+}
+
+/**
+ * 从条目集合中移除 id 已清除的条目（保留原有 Map 键）。
+ * 扫描入口调用：防止 `globalEntryCache` / KV 中残留的已清除
+ * 条目在 replace=false 的合并扫描中继续存活。
+ */
+export function withoutClearedEntries(
+  entries: ReadonlyMap<string, SubEntry>,
+  clearedIds: ReadonlySet<string> | undefined,
+): Map<string, SubEntry> {
+  const next = new Map(entries)
+  if (!clearedIds || clearedIds.size === 0) return next
+  for (const [key, entry] of next) {
+    if (clearedIds.has(entry.id)) next.delete(key)
+  }
+  return next
+}
