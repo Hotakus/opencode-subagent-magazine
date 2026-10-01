@@ -358,11 +358,17 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
               if (!data[parentID]) data[parentID] = { ts: Date.now(), entries: [], scroll: 0, expanded: "", children: {} }
               if (!data[parentID].children) data[parentID].children = {}
               if (!data[parentID].children[sid]) data[parentID].children[sid] = { scroll: 0, expanded: "", entries: [] }
-              data[parentID].children[sid] = { ...data[parentID].children[sid], entries: [...entries.values()] }
+              // 已手动清除的条目不得因缓存回落而回填。
+              const cleared = new Set<string>(data[parentID].children[sid].clearedIds ?? [])
+              data[parentID].children[sid] = {
+                ...data[parentID].children[sid],
+                entries: [...entries.values()].filter((e) => !cleared.has(e.id)),
+              }
             } else {
+              const cleared = new Set<string>(data[sid]?.clearedIds ?? [])
               data[sid] = {
                 ts: Date.now(),
-                entries: [...entries.values()],
+                entries: [...entries.values()].filter((e) => !cleared.has(e.id)),
                 scroll: data[sid]?.scroll ?? 0,
                 expanded: data[sid]?.expanded ?? "",
                 children: data[sid]?.children ?? {},
@@ -440,11 +446,21 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             onConfirm={() => {
               try {
                 const data = JSON.parse(String(api.kv.get(`${KV_PREFIX}.session_data`, "{}")))
+                // 内存缓存可能含尚未落盘的条目——一并计入清除名单，
+                // 防止它们随后被 merge 回 KV（见 SubAgentPanel 的持久化过滤）。
+                const cachedIds = [...(globalEntryCache.get(sid)?.values() ?? [])].map((e: any) => e.id)
                 let count = 0
                 if (parentID) {
-                  if (data[parentID]?.children?.[sid]) {
+                  if (data[parentID]?.children?.[sid] || cachedIds.length > 0) {
+                    if (!data[parentID]) {
+                      data[parentID] = { ts: Date.now(), entries: [], scroll: 0, expanded: "", children: {} }
+                    }
+                    if (!data[parentID].children) data[parentID].children = {}
+                    if (!data[parentID].children[sid]) {
+                      data[parentID].children[sid] = { scroll: 0, expanded: "", entries: [] }
+                    }
                     const child = data[parentID].children[sid]
-                    const ids = child.entries?.map((e: any) => e.id) ?? []
+                    const ids = [...new Set([...(child.entries?.map((e: any) => e.id) ?? []), ...cachedIds])]
                     count = ids.length
                     child.entries = []
                     child.scroll = 0
@@ -452,9 +468,12 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                     child.clearedIds = [...new Set([...(child.clearedIds ?? []), ...ids])]
                   }
                 } else {
-                  count = data[sid]?.entries?.length ?? 0
-                  if (data[sid]) {
-                    const ids = data[sid].entries?.map((e: any) => e.id) ?? []
+                  if (data[sid] || cachedIds.length > 0) {
+                    if (!data[sid]) {
+                      data[sid] = { ts: Date.now(), entries: [], scroll: 0, expanded: "", children: {} }
+                    }
+                    const ids = [...new Set([...(data[sid].entries?.map((e: any) => e.id) ?? []), ...cachedIds])]
+                    count = ids.length
                     data[sid].entries = []
                     data[sid].scroll = 0
                     data[sid].expanded = ""

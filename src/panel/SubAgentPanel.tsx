@@ -22,7 +22,7 @@ import { KV_PREFIX, updateSessionData } from "../core/kv"
 import type { PanelApi, PanelEvent } from "./panel-api"
 import { globalEntryCache, clearTick } from "./store"
 import { isDirectChildSession } from "./session-routing"
-import { findSubEntryKey, mergeSubEntries, upsertSubEntry } from "./entry-map"
+import { findSubEntryKey, mergeSubEntries, mergeSubEntriesExcludingCleared, withoutClearedEntries, upsertSubEntry } from "./entry-map"
 
 /** Entry line left prefix: icon + space + status dot + space */
 const LEFT_PAD = 4
@@ -165,12 +165,13 @@ export function SubAgentPanel(props: {
           if (isChild) {
             const parent = ensureRootRecord(data, parentSid)
             const child = ensureChildRecord(data, parentSid, sid)
-            child.entries = [...mergeSubEntries(child.entries ?? [], entries.values()).values()]
+            // 已被手动清除的条目永不回填（即使本快照来自清除前的旧状态）。
+            child.entries = [...mergeSubEntriesExcludingCleared(child.entries ?? [], entries.values(), child.clearedIds).values()]
             parent.ts = Date.now()
           } else {
             const rec = ensureRootRecord(data, sid)
             rec.ts = Date.now()
-            rec.entries = [...mergeSubEntries(rec.entries ?? [], entries.values()).values()]
+            rec.entries = [...mergeSubEntriesExcludingCleared(rec.entries ?? [], entries.values(), rec.clearedIds).values()]
           }
         })
       } catch {}
@@ -249,12 +250,12 @@ export function SubAgentPanel(props: {
             if (isChild) {
               const parent = ensureRootRecord(data, parentSid)
               const child = ensureChildRecord(data, parentSid, props.sessionId)
-              child.entries = [...mergeSubEntries(child.entries ?? [], next.values()).values()]
+              child.entries = [...mergeSubEntriesExcludingCleared(child.entries ?? [], next.values(), child.clearedIds).values()]
               parent.ts = Date.now()
             } else {
               const rec = ensureRootRecord(data, props.sessionId)
               rec.ts = Date.now()
-              rec.entries = [...mergeSubEntries(rec.entries ?? [], next.values()).values()]
+              rec.entries = [...mergeSubEntriesExcludingCleared(rec.entries ?? [], next.values(), rec.clearedIds).values()]
             }
           })
         } catch {}
@@ -684,7 +685,7 @@ export function SubAgentPanel(props: {
                 latest[parentSid] = {
                   ...(latestRec ?? rec),
                   ts: nowTs,
-                  entries: [...mergeSubEntries(latestRec?.entries ?? [], fallbackMap.values()).values()],
+                  entries: [...mergeSubEntriesExcludingCleared(latestRec?.entries ?? [], fallbackMap.values(), latestRec?.clearedIds).values()],
                 }
               })
             }
@@ -698,7 +699,7 @@ export function SubAgentPanel(props: {
             data[parentSid] = {
               ...(rec ?? { entries: [], scroll: 0, expanded: "", children: {}, ts: nowTs }),
               ts: nowTs,
-              entries: [...mergeSubEntries(rec?.entries ?? [], parentCache.values()).values()],
+              entries: [...mergeSubEntriesExcludingCleared(rec?.entries ?? [], parentCache.values(), rec?.clearedIds).values()],
             }
           })
         }
@@ -798,14 +799,17 @@ export function SubAgentPanel(props: {
     if (!msgs || (msgs as any[]).length === 0) return false
     // scan 结果先写入内存（setEntryMapRaw）；scan 末尾统一走 persistEntries 的 merge-safe 落盘。
     setEntryMapRaw((prev) => {
-      // 优先从模块级缓存加载，KV 仅作缓存未命中时的回退
-      const next = replace
-        ? new Map(globalEntryCache.get(sid) ?? loadEntries(sid))
-        : new Map(prev)
-      // 从 KV 加载当前会话的清除名单，扫描时跳过被手动清除的历史条目
+      // 从 KV 加载当前会话的清除名单：既用于跳过被手动清除的历史条目，
+      // 也用于剔除缓存/KV 中残留的已清除条目（见 withoutClearedEntries）。
       const { parentSid: scanPSid, isChild: scanChild } = resolveParent(sid)
       const scanRec = loadSessionData()[scanPSid]
       const clearedIds = new Set(scanChild ? scanRec?.children?.[sid]?.clearedIds : scanRec?.clearedIds)
+      // 优先从模块级缓存加载，KV 仅作缓存未命中时的回退；
+      // 已清除条目一律丢弃，防止过期缓存让它们继续存活。
+      const next = withoutClearedEntries(
+        replace ? new Map(globalEntryCache.get(sid) ?? loadEntries(sid)) : new Map(prev),
+        clearedIds,
+      )
       try {
         for (const msg of msgs as any[]) {
           const parts = props.api.session.part((msg as any).id) ?? []
@@ -952,6 +956,10 @@ export function SubAgentPanel(props: {
     if (snapshot.size > 0) {
       globalEntryCache.set(sid, new Map(snapshot))
       persistEntries(sid, snapshot)
+    } else if (globalEntryCache.has(sid)) {
+      // 扫描后为空（手动清除或全部条目被剔除）：同步清空模块缓存，
+      // 避免其他视图/下次 replace 扫描把旧条目捞回来。
+      globalEntryCache.set(sid, new Map(snapshot))
     }
     return true
   }
@@ -1223,6 +1231,8 @@ export function SubAgentPanel(props: {
     const tick = clearTick()    // 外部触发清除时 +1，effect 重跑
     const forceReload = tick !== lastTick && !switched
     lastTick = tick
+    // 清除触发重扫：丢弃清除前排队的 debounce 快照，防止旧 map 回填。
+    if (forceReload) clearTimeout(persistTimer)
 
     let attempts = 0
     let retryTimer: ReturnType<typeof setTimeout> | undefined
