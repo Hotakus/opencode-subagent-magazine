@@ -1489,8 +1489,19 @@ export function SubAgentPanel(props: {
   const expandedValAvail = () => Math.max(6, panelWidth() - gutter() - INDENT - expandedMaxLabelW())
 
   // ── header parts for colored spans ──
+  // 注意：不可返回 null。头部 span 与空态分支属于不同的计算节点，
+  // 列表清空时 span 可能先被求值（曾崩溃：null is not an object
+  // (evaluating 'summaryParts().duration')）。空列表返回空摘要即可。
   const summaryParts = createMemo(() => {
-    if (!anyEntry()) return null
+    if (!anyEntry()) {
+      return {
+        done: "",
+        running: null as string | null,
+        err: null as string | null,
+        duration: "",
+        cost: "",
+      }
+    }
     const dot = "\u25cf"
     const cost = totalCost()
     return {
@@ -1504,7 +1515,6 @@ export function SubAgentPanel(props: {
 
   const summaryCols = createMemo(() => {
     const p = summaryParts()
-    if (!p) return 0
     let w = visualWidth(p.done)
     if (p.running) w += 1 + visualWidth(p.running)
     if (p.err) w += 1 + visualWidth(p.err)
