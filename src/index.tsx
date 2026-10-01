@@ -16,6 +16,7 @@ import { KV_PREFIX } from "./core/kv"
 import { TIME_FORMATS, TIME_FORMAT_SAMPLES } from "./core/format"
 import type { PanelApi } from "./panel/panel-api"
 import { SubAgentPanel } from "./panel/SubAgentPanel"
+import { mergeSubEntriesForPersist } from "./panel/entry-map"
 import { globalEntryCache, setClearTick } from "./panel/store"
 
 // Plugin entry
@@ -358,17 +359,17 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
               if (!data[parentID]) data[parentID] = { ts: Date.now(), entries: [], scroll: 0, expanded: "", children: {} }
               if (!data[parentID].children) data[parentID].children = {}
               if (!data[parentID].children[sid]) data[parentID].children[sid] = { scroll: 0, expanded: "", entries: [] }
-              // 已手动清除的条目不得因缓存回落而回填。
-              const cleared = new Set<string>(data[parentID].children[sid].clearedIds ?? [])
+              // merge-safe 写入：已清除条目不回填，同时压缩载荷（prompt 截断）。
+              const child = data[parentID].children[sid]
               data[parentID].children[sid] = {
-                ...data[parentID].children[sid],
-                entries: [...entries.values()].filter((e) => !cleared.has(e.id)),
+                ...child,
+                entries: [...mergeSubEntriesForPersist(child.entries ?? [], entries.values(), child.clearedIds).values()],
               }
             } else {
-              const cleared = new Set<string>(data[sid]?.clearedIds ?? [])
               data[sid] = {
+                ...(data[sid] ?? {}),
                 ts: Date.now(),
-                entries: [...entries.values()].filter((e) => !cleared.has(e.id)),
+                entries: [...mergeSubEntriesForPersist(data[sid]?.entries ?? [], entries.values(), data[sid]?.clearedIds).values()],
                 scroll: data[sid]?.scroll ?? 0,
                 expanded: data[sid]?.expanded ?? "",
                 children: data[sid]?.children ?? {},

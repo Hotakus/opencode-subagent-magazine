@@ -6,7 +6,7 @@ import { KV_PREFIX, SETTING_KEYS, updateSessionData, readTTLDays } from "../core
 import { PLUGIN_VERSION } from "../_version"
 import { LANG_META, createT } from "../i18n"
 import { globalEntryCache, setClearTick } from "../panel/store"
-import { mergeSubEntriesExcludingCleared } from "../panel/entry-map"
+import { mergeSubEntriesForPersist } from "../panel/entry-map"
 import { openSettingsMenu } from "./settings-menu"
 
 /** V2 命令（对齐 V1 的 9 个斜杠命令——promise 式对话框）。 */
@@ -284,7 +284,7 @@ export function makeCommands(
                 if (!data[parentSid].children) data[parentSid].children = {}
                 const prev = data[parentSid].children[sid]?.entries ?? []
                 // 已手动清除的条目不得因缓存合并而回填。
-                const merged = [...mergeSubEntriesExcludingCleared(prev, entries.values(), data[parentSid].children[sid]?.clearedIds).values()].map((e) =>
+                const merged = [...mergeSubEntriesForPersist(prev, entries.values(), data[parentSid].children[sid]?.clearedIds).values()].map((e) =>
                   e.status === "running" || e.status === "cancel_requested"
                     ? { ...e, status: "done" as SubStatus, endedAt: e.endedAt ?? Date.now() }
                     : e
@@ -295,7 +295,7 @@ export function makeCommands(
                 }
               } else {
                 const rec = data[parentSid] ?? { ts: Date.now(), entries: [], scroll: 0, expanded: "", children: {} }
-                const merged = [...mergeSubEntriesExcludingCleared(rec.entries ?? [], entries.values(), rec.clearedIds).values()].map((e) =>
+                const merged = [...mergeSubEntriesForPersist(rec.entries ?? [], entries.values(), rec.clearedIds).values()].map((e) =>
                   e.status === "running" || e.status === "cancel_requested"
                     ? { ...e, status: "done" as SubStatus, endedAt: e.endedAt ?? Date.now() }
                     : e
