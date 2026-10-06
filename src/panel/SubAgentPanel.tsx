@@ -1104,9 +1104,10 @@ export function SubAgentPanel(props: {
   let enrichCursor = 0
 
   onMount(() => {
-    // Fast clock for smooth time display, separate from token polling
+    // 100ms 时钟：秒级耗时带两位小数（如 1.23s），呼吸动效也依赖高频重绘，
+    // 因此这里必须保持 100ms，不能降频。
     const clock = setInterval(() => { setNow(Date.now()); bump() }, 100)
-    // Token poll — runs every 500ms for running entries
+    // Token poll — runs every 1s for running entries
     let tick = 0
     const tokenTimer = setInterval(() => {
       tick++
@@ -1116,7 +1117,7 @@ export function SubAgentPanel(props: {
         setEntryMapRaw((prev) => {
           let changed = false
           const next = new Map(prev)
-          // 每 ~2s 从本地库同步衍生会话（spawn）：没有对应工具条目的
+          // 每 ~4s 从本地库同步衍生会话（spawn）：没有对应工具条目的
           // 子会话补成 sub: 条目（标题/agent/用量/终态都来自数据库）。
           if (tick % 4 === 0) {
             try {
@@ -1266,7 +1267,7 @@ export function SubAgentPanel(props: {
         })
       }
       bump()
-    }, 500)
+    }, 1000)
     bump()
 
     const unsubPart = props.api.event.on("part.updated", (e) => {
