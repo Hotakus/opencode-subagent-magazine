@@ -11,7 +11,7 @@ import type {
 import { createSignal } from "solid-js"
 import { PLUGIN_VERSION } from "./_version"
 import { LANG_META, createT, detectLang } from "./i18n"
-import type { Lang, SortOrder, ScrollMode, SubStatus, SharedSignals, TimeFormat } from "./core/types"
+import type { Lang, RefreshMode, SortOrder, ScrollMode, SubStatus, SharedSignals, TimeFormat } from "./core/types"
 import { KV_PREFIX } from "./core/kv"
 import { TIME_FORMATS, TIME_FORMAT_SAMPLES } from "./core/format"
 import type { PanelApi } from "./panel/panel-api"
@@ -36,6 +36,7 @@ function createSidebarSlot(api: TuiPluginApi, panelApi: PanelApi, sig: SharedSig
             maxEntries={sig.maxEntries}
             sortOrder={sig.sortOrder}
             scrollMode={sig.scrollMode}
+            refreshMode={sig.refreshMode}
             borderVisible={sig.borderVisible}
             showEntryCost={sig.showEntryCost}
             showEntryTime={sig.showEntryTime}
@@ -65,6 +66,9 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
   const [scrollMode, setScrollMode] = createSignal<ScrollMode>(
     String(api.kv.get(`${KV_PREFIX}.scroll_mode`, "wheel")) === "click" ? "click" : "wheel"
   )
+  const [refreshMode, setRefreshMode] = createSignal<RefreshMode>(
+    String(api.kv.get(`${KV_PREFIX}.refresh_mode`, "smooth")) === "eco" ? "eco" : "smooth"
+  )
   const [borderVisible, setBorderVisible] = createSignal<boolean>(
     (api.kv.get(`${KV_PREFIX}.border`, false) as boolean) === true
   )
@@ -88,7 +92,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
     (api.kv.get(`${KV_PREFIX}.db_sync`, true) as boolean) !== false
   )
 
-  const signals: SharedSignals = { lang, setLang, maxEntries, setMaxEntries, sortOrder, setSortOrder, scrollMode, setScrollMode, borderVisible, setBorderVisible, showEntryCost, setShowEntryCost, showEntryTime, setShowEntryTime, showEntryTokens, setShowEntryTokens, timeFormat, setTimeFormat, showOrigin, setShowOrigin, dbSync, setDbSync, sessionId: "" }
+  const signals: SharedSignals = { lang, setLang, maxEntries, setMaxEntries, sortOrder, setSortOrder, scrollMode, setScrollMode, refreshMode, setRefreshMode, borderVisible, setBorderVisible, showEntryCost, setShowEntryCost, showEntryTime, setShowEntryTime, showEntryTokens, setShowEntryTokens, timeFormat, setTimeFormat, showOrigin, setShowOrigin, dbSync, setDbSync, sessionId: "" }
 
   // ── V1 PanelApi adapter: wraps the V1 host API into the shared panel contract ──
   const v1Api: PanelApi = {
@@ -505,6 +509,33 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
         signals.setBorderVisible(!cur)
         api.ui.toast({ message: !cur ? t("borderShown") : t("borderHidden") })
         dialog?.clear()
+      },
+    },
+    {
+      title: "SubAgent Magazine: Refresh Mode",
+      value: "subagent-refresh",
+      description: "Set sidebar refresh mode (smooth 100ms / eco 1s)",
+      slash: { name: "subagent-refresh" },
+      onSelect: (dialog) => {
+        const t = createT(() => signals.lang())
+        dialog?.replace(() => (
+          <api.ui.DialogSelect
+            title={t("settings.refresh")}
+            options={[
+              { title: t("refresh.smooth"), value: "smooth" },
+              { title: t("refresh.eco"), value: "eco" },
+            ]}
+            onSelect={(opt: { value: unknown }) => {
+              const m = opt.value as RefreshMode
+              setRefreshMode(m)
+              api.kv.set(`${KV_PREFIX}.refresh_mode`, m)
+              api.ui.toast({
+                message: `${t("settings.refresh")}: ${m === "eco" ? t("refresh.eco") : t("refresh.smooth")}`,
+              })
+              dialog?.clear()
+            }}
+          />
+        ))
       },
     },
     {

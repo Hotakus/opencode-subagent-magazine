@@ -31,6 +31,8 @@ export type SortOrder = "desc" | "asc"
 export type ScrollMode = "wheel" | "click"
 /** How elapsed time is rendered in the sidebar (see TIME_FORMAT_SAMPLES). */
 export type TimeFormat = "decimal" | "short" | "clock" | "compact" | "seconds"
+/** 面板刷新模式：smooth = 100ms（两位小数 + 呼吸动效），eco = 1s（省电，整秒显示）。 */
+export type RefreshMode = "smooth" | "eco"
 
 /** OpenCode built-in tool names that spawn sub-agents or delegate tasks. */
 export const SUBAGENT_TOOLS = new Set(["task", "subagent", "delegate", "call_omo_agent"])
@@ -67,6 +69,8 @@ export interface SharedSignals {
   setSortOrder: (o: SortOrder) => void
   scrollMode: () => ScrollMode
   setScrollMode: (m: ScrollMode) => void
+  refreshMode: () => RefreshMode
+  setRefreshMode: (m: RefreshMode) => void
   borderVisible: () => boolean
   setBorderVisible: (v: boolean) => void
   showEntryCost: () => boolean

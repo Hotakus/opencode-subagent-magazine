@@ -1,6 +1,6 @@
 import type { Context } from "./types"
 import type { PanelApi } from "../panel/panel-api"
-import type { Lang, SortOrder, ScrollMode, SharedSignals, TimeFormat } from "../core/types"
+import type { Lang, SortOrder, ScrollMode, RefreshMode, SharedSignals, TimeFormat } from "../core/types"
 import { SETTING_KEYS, readTTLDays } from "../core/kv"
 import { TIME_FORMATS, TIME_FORMAT_SAMPLES } from "../core/format"
 import { LANG_META, createT } from "../i18n"
@@ -31,6 +31,7 @@ async function runSettingsMenu(context: Context, api: PanelApi, signals: SharedS
   const ttlLabel = () => ttlTitle(readTTLDays(kv))
   const orderLabel = () => (signals.sortOrder() === "desc" ? t("order.desc") : t("order.asc"))
   const scrollLabel = () => (signals.scrollMode() === "wheel" ? t("scroll.wheel") : t("scroll.click"))
+  const refreshLabel = () => (signals.refreshMode() === "eco" ? t("refresh.eco") : t("refresh.smooth"))
   const toast = (item: string, value: string) =>
     context.ui.toast.show({ message: t("settings.saved", { item, value }) })
 
@@ -43,6 +44,7 @@ async function runSettingsMenu(context: Context, api: PanelApi, signals: SharedS
         { title: t("settings.max"), value: "max", description: String(signals.maxEntries()), category },
         { title: t("settings.order"), value: "order", description: orderLabel(), category },
         { title: t("settings.scroll"), value: "scroll", description: scrollLabel(), category },
+        { title: t("settings.refresh"), value: "refresh", description: refreshLabel(), category },
         { title: t("settings.ttl"), value: "ttl", description: ttlLabel(), category },
         { title: t("settings.border"), value: "border", description: onOff(signals.borderVisible()), category },
         { title: t("settings.showEntryCost"), value: "cost", description: onOff(signals.showEntryCost()), category },
@@ -121,6 +123,23 @@ async function runSettingsMenu(context: Context, api: PanelApi, signals: SharedS
         signals.setScrollMode(picked)
         kv.set(SETTING_KEYS.scrollMode, picked)
         toast(t("settings.scroll"), picked === "wheel" ? t("scroll.wheel") : t("scroll.click"))
+      }
+    }
+
+    // ── 刷新模式 ──
+    if (choice === "refresh") {
+      const picked = await context.ui.dialog.select<RefreshMode>({
+        title: t("settings.refresh"),
+        options: [
+          { title: t("refresh.smooth"), value: "smooth" },
+          { title: t("refresh.eco"), value: "eco" },
+        ],
+        current: signals.refreshMode(),
+      })
+      if (picked) {
+        signals.setRefreshMode(picked)
+        kv.set(SETTING_KEYS.refreshMode, picked)
+        toast(t("settings.refresh"), picked === "eco" ? t("refresh.eco") : t("refresh.smooth"))
       }
     }
 
