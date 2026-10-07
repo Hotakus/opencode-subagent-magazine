@@ -54,12 +54,12 @@ Interested in token cache visualization? Check out [opencode-visual-cache](https
 - **Configurable Sort Order**: `/subagent-order` supports descending (newest first) and ascending (oldest first) ordering
 - **Scroll Mode Toggle**: `/subagent-scroll` switches between wheel scroll and click-to-scroll (click `↑ more` / `↓ more` to page), resolving sidebar/global scroll conflicts
 - **TTL Auto Cleanup**: Configurable retention period (3/7/14/30 days or Never), auto-refreshed on access, expired data purged automatically
-- **Manual Entry Clear**: `/subagent-clear-entries` removes all records for the current session and prevents scan re-creation of historical entries
+- **Manual Entry Clear**: `/subagent-clear-entries` clears the current panel in one confirmation. Tool-call aliases, spawned sessions, cached entries and delayed writes cannot recreate cleared history. This does not delete OpenCode conversations or stop running agents; new child sessions remain visible.
 - **Language Support**: Runtime language switch via `/subagent-lang` (Chinese / English), preference persisted
 - **Toggleable Border**: `/subagent-border` controls the panel border (hidden by default); when shown, it matches the cache stats panel style
-- **Refresh Mode**: `/subagent-refresh` chooses smooth (100ms, decimals + breathing animation) or eco (1s, whole seconds, fewer repaints)
+- **Refresh Mode**: `/subagent-refresh` chooses smooth (100ms, decimals + breathing animation) or eco (1s, whole seconds, fewer repaints). Running dots in the header and rows share the same breathing phase, including while collapsed. The animation clock stops only when the panel is idle; cleared items no longer trigger recovery scans or per-child database enrichment.
 - **Multi-instance Safe**: sidebar entries no longer overwrite each other when several TUIs are open (atomic merge writes)
-- **Missed-event Recovery**: periodic reconcile + history scan + discovery poll recover sub-agents whose events were dropped
+- **Missed-event Recovery**: periodic reconcile + history scan + discovery poll recover sub-agents whose events were dropped. Global tool/step events from other sessions do not repaint or rescan the current panel.
 - **Entry Display Toggles**: `/subagent-cost` shows per-entry cost in the list (4 decimals, off by default; always shown when expanded); `/subagent-time` and `/subagent-tokens` toggle elapsed time and tokens (on by default)
 - **Configurable Time Format**: `/subagent-time-format` supports short (default), decimal, clock, compact, seconds
 - **Settings Menu**: `/subagent-sections` opens the native looping settings menu (V2); `/subagent-config` shows a settings summary

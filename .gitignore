@@ -4,3 +4,4 @@ dist/
 .sisyphus/
 migrate-kv.mjs
 src/_version.ts
+__pycache__/

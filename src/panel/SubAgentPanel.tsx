@@ -17,12 +17,14 @@ import { createT } from "../i18n"
 import type { Lang, RefreshMode, SortOrder, ScrollMode, SubEntry, SubStatus, SessionRecord, TimeFormat } from "../core/types"
 import { SUBAGENT_TOOLS, isBackgroundInput } from "../core/types"
 import { visualWidth, truncate, fmtDuration, fmtTokens, safeErrorMsg } from "../core/format"
-import { rgb, desaturateTo, dimColor, FALLBACK, MAX_SAT } from "../core/color"
+import { desaturateTo, dimColor, FALLBACK, MAX_SAT } from "../core/color"
 import { KV_PREFIX, updateSessionData } from "../core/kv"
 import type { PanelApi, PanelEvent } from "./panel-api"
-import { globalEntryCache, clearTick } from "./store"
-import { isDirectChildSession } from "./session-routing"
-import { compactSubEntry, findSubEntryKey, mergeSubEntriesForPersist, PERSISTED_PROMPT_MAX, prunableClearedIds, withoutClearedEntries, upsertSubEntry } from "./entry-map"
+import { globalEntryCache, clearNotice } from "./store"
+import { isCurrentSessionEvent, isDirectChildSession } from "./session-routing"
+import { compactSubEntry, findSubEntryKey, isSubEntryCleared, mergeSubEntriesForPersist, PERSISTED_PROMPT_MAX, prunableClearedIds, withoutClearedEntries, upsertSubEntry } from "./entry-map"
+import { hasMissingSubagentPart } from "./entry-discovery"
+import { breathingColor, panelClockInterval } from "./animation"
 
 /** Entry line left prefix: icon + space + status dot + space */
 const LEFT_PAD = 4
@@ -91,11 +93,32 @@ export function SubAgentPanel(props: {
     clearedIds?: string[]
   }
 
+  let cachedRaw: unknown
+  let cachedData: Record<string, SessionRecord> = {}
   const loadSessionData = (): Record<string, SessionRecord> => {
     try {
       const raw = props.api.kv.get(SESSION_DATA_KEY, "{}")
-      return JSON.parse(String(raw))
+      if (raw !== cachedRaw) {
+        cachedData = JSON.parse(String(raw))
+        cachedRaw = raw
+      }
+      return cachedData
     } catch { return {} }
+  }
+
+  let clearedSession: string | undefined
+  let clearedSource: string[] | undefined
+  let cachedCleared = new Set<string>()
+  const loadClearedIds = (sid: string): ReadonlySet<string> => {
+    const { parentSid, isChild } = resolveParent(sid)
+    const rec = loadSessionData()[parentSid]
+    const source = isChild ? rec?.children?.[sid]?.clearedIds : rec?.clearedIds
+    if (sid !== clearedSession || source !== clearedSource) {
+      clearedSession = sid
+      clearedSource = source
+      cachedCleared = new Set(source)
+    }
+    return cachedCleared
   }
 
   /**
@@ -105,7 +128,7 @@ export function SubAgentPanel(props: {
    */
   const mutateSessionData = (mutator: (data: Record<string, SessionRecord>) => void) => {
     // 宿主存储可能异步 reject；吞掉以免失败写入变成未处理 rejection 拖垮 TUI。
-    void Promise.resolve(updateSessionData(props.api.kv, mutator)).catch(() => {})
+    try { void Promise.resolve(updateSessionData(props.api.kv, mutator)).catch(() => {}) } catch {}
   }
 
   /** 带合理默认值的 SessionRecord（记录可能在首次写入时创建）。 */
@@ -130,11 +153,17 @@ export function SubAgentPanel(props: {
 
   /** 将任意 session ID 解析为父会话 ID + 是否子会话。
    *  通过 SDK session.get(sid).parentID 判断，无 parentID 即为主会话。 */
+  const parentRoutes = new Map<string, { parentSid: string; isChild: boolean }>()
   const resolveParent = (sid: string): { parentSid: string; isChild: boolean } => {
+    const cached = parentRoutes.get(sid)
+    if (cached) return cached
     try {
       const session = props.api.session.get(sid)
       const parentID = (session as any)?.parentID as string | undefined
-      if (parentID) return { parentSid: parentID, isChild: true }
+      const route = { parentSid: parentID ?? sid, isChild: Boolean(parentID) }
+      // Parentage is immutable. Do not cache misses before SDK hydration.
+      if (session) parentRoutes.set(sid, route)
+      return route
     } catch {}
     return { parentSid: sid, isChild: false }
   }
@@ -153,7 +182,7 @@ export function SubAgentPanel(props: {
         }
       }
     } catch {}
-    return m
+    return withoutClearedEntries(m, loadClearedIds(sid))
   }
 
   let persistTimer: ReturnType<typeof setTimeout> | undefined
@@ -226,7 +255,7 @@ export function SubAgentPanel(props: {
     const cleared = new Set(rec.clearedIds ?? [])
     for (const entry of rec.entries ?? []) {
       if ((entry.prompt ?? "").length > PERSISTED_PROMPT_MAX) return true
-      if (cleared.has(entry.id)) return true
+      if (isSubEntryCleared(entry, cleared)) return true
     }
     return false
   }
@@ -275,13 +304,21 @@ export function SubAgentPanel(props: {
   }
 
   const [entryMap, setEntryMapRaw] = createSignal(loadEntries(props.sessionId))
+  const hasRunningEntries = createMemo(() => {
+    for (const entry of entryMap().values()) {
+      if (entry.status === "running" || entry.status === "cancel_requested") return true
+    }
+    return false
+  })
 
   // Wrapped setter — also persists to kv on every mutation
   const setEntryMap = (
     arg: Map<string, SubEntry> | ((prev: Map<string, SubEntry>) => Map<string, SubEntry>),
   ) => {
     setEntryMapRaw((prev) => {
-      const next = typeof arg === "function" ? (arg as Function)(prev) : arg
+      const proposed = typeof arg === "function" ? (arg as Function)(prev) : arg
+      if (proposed === prev) return prev
+      const next = withoutClearedEntries(proposed, loadClearedIds(props.sessionId))
 
       // entry 状态落定（done/error）时立即持久化到 KV，跳过常规 debounce，
       // 确保跨视图的状态一致性。
@@ -361,6 +398,15 @@ export function SubAgentPanel(props: {
   const upsertEntry = (
     partial: Omit<SubEntry, "startedAt" | "endedAt"> & { startedAt?: number }
   ) => {
+    const cleared = loadClearedIds(props.sessionId)
+    if (isSubEntryCleared(partial, cleared)) return
+    if (!partial.sessionId && partial.id.startsWith("tool:") && cleared.size > 0) {
+      try {
+        const sessionId = props.api.session.resolveChild?.({ parentId: props.sessionId, callId: partial.id.slice(5) })
+        if (sessionId) partial = { ...partial, sessionId }
+      } catch {}
+      if (isSubEntryCleared(partial, cleared)) return
+    }
     setEntryMap((prev) => upsertSubEntry(prev, partial))
   }
 
@@ -536,6 +582,7 @@ export function SubAgentPanel(props: {
       const stMeta = partMetadata(part as Record<string, any>, st)
       const subSid = stMeta?.session_id !== undefined ? String(stMeta.session_id)
         : stMeta?.sessionId !== undefined ? String(stMeta.sessionId)
+        : stMeta?.sessionID !== undefined ? String(stMeta.sessionID)
         : undefined
       upsertEntry({ id, title, agent, prompt, sessionId: subSid, status, origin: "tool", background: isBackgroundInput(input) })
     }
@@ -883,6 +930,11 @@ export function SubAgentPanel(props: {
 
               const st = (part as any).state as Record<string, unknown> | undefined
               const rawStatus = String(st?.status ?? "")
+              // Skip exact cleared calls before metadata/database lookups.
+              if (clearedIds.has(id)) {
+                if (rawStatus === "error") seenErrorIds.add(id)
+                continue
+              }
               const scanInput = st?.input as Record<string, unknown> | undefined
               // TUI 数据层把子代理 metadata 放在 part 级；旧缓存
               // 形状可能嵌在 state 里。两处都读。
@@ -902,7 +954,7 @@ export function SubAgentPanel(props: {
 
               // 已手动清除的条目：scan 发现但不在内存 → 跳过重建。
               // error part 永远不会重建条目——顺手记入可清理名单。
-              if (!exists && clearedIds.has(id)) {
+              if (isSubEntryCleared({ id, sessionId: scanSubSid }, clearedIds)) {
                 if (rawStatus === "error") seenErrorIds.add(id)
                 continue
               }
@@ -1022,19 +1074,13 @@ export function SubAgentPanel(props: {
       // 避免其他视图/下次 replace 扫描把旧条目捞回来。
       globalEntryCache.set(sid, new Map(snapshot))
     }
-    // 安全清理清除名单：error part 不会重建条目；本地库已不存在的子会话
-    // 不会出现在轮询里。仅当本轮扫描确实读取了名单才尝试，且只删可证明
+    // 安全清理清除名单：error part 不会重建条目。子会话身份 tombstone
+    // 保留，因为历史 tool part 仍可引用已删除的子会话。只删可证明
     // 不会再重建的 id（保守策略，避免复活已清除条目）。
     if (scanClearedIds.size > 0) {
-      let liveChildIds: Set<string> | undefined
-      try {
-        const children = props.api.session.listChildren?.(sid)
-        if (children) liveChildIds = new Set(children.map((c) => c.id).filter((id): id is string => Boolean(id)))
-      } catch {}
       const prunable = prunableClearedIds({
         clearedIds: scanClearedIds,
         errorToolIds: seenErrorIds,
-        liveChildIds,
       })
       if (prunable.length > 0) pruneClearedIds(sid, prunable)
     }
@@ -1048,43 +1094,9 @@ export function SubAgentPanel(props: {
    *  事件驱动 rescan 与周期性 discovery poll 共用的轻量检查：
    *  即使宿主的所有事件订阅都静默失效，
    *  也能恢复条目。 */
-  const missingNewestToolPart = (): boolean => {
-    try {
-      const msgs = props.api.session.messages(props.sessionId) as any[] | undefined
-      if (!msgs || msgs.length === 0) return false
-      const map = entryMap()
-      const from = Math.max(0, msgs.length - 6)
-      for (let i = msgs.length - 1; i >= from; i--) {
-        const parts = props.api.session.part(msgs[i]?.id) ?? []
-        for (const part of parts as any[]) {
-          if (!part || part.type !== "tool") continue
-          if (!SUBAGENT_TOOLS.has(String(part.tool ?? ""))) continue
-          const partId = String(part.id ?? "")
-          if (!partId) continue
-          const st = part.state as Record<string, unknown> | undefined
-          const rawStatus = String(st?.status ?? "")
-          // scan 从不为 pending/error part 创建条目；
-          // 这里忽略它们可避免对一直保持该状态的 part 反复 rescan。
-          if (rawStatus !== "running" && rawStatus !== "completed") continue
-          const id = `tool:${partId}`
-          const meta = partMetadata(part, st)
-          const subSid = meta?.session_id !== undefined ? String(meta.session_id)
-            : meta?.sessionId !== undefined ? String(meta.sessionId)
-            : undefined
-          const key = findSubEntryKey(map, id, subSid)
-          const entry = key ? map.get(key) : undefined
-          if (!entry) return true
-          // 非后台 tool 已完成、条目却仍停在 running：补一次 scan 收尾
-          // （success 事件可能因缺少 metadata 被适配层丢弃）。
-          const input = st?.input as Record<string, unknown> | undefined
-          const isBackground = isBackgroundInput(input)
-          const stillRunning = entry.status === "running" || entry.status === "cancel_requested"
-          if (rawStatus === "completed" && !isBackground && stillRunning) return true
-        }
-      }
-    } catch {}
-    return false
-  }
+  const missingNewestToolPart = (): boolean => hasMissingSubagentPart(
+    props.api.session, props.sessionId, entryMap(), loadClearedIds(props.sessionId),
+  )
 
   /** 新消息到达时防抖重扫。覆盖 scan 早于宿主消息缓存
    *  加载完成的竞态。 */
@@ -1109,7 +1121,9 @@ export function SubAgentPanel(props: {
     //  - smooth：100ms 时钟——耗时带两位小数（如 1.23s），呼吸动效需要高频重绘（默认）；
     //  - eco：1s 时钟——省电模式，耗时按整秒显示，动效按秒更新。
     createEffect(() => {
-      const ms = props.refreshMode() === "eco" ? 1000 : 100
+      const ms = panelClockInterval(props.refreshMode(), hasRunningEntries())
+      if (ms === undefined) return
+      setNow(Date.now())
       const clock = setInterval(() => { setNow(Date.now()); bump() }, ms)
       onCleanup(() => clearInterval(clock))
     })
@@ -1121,19 +1135,19 @@ export function SubAgentPanel(props: {
         let enriched: Map<string, SubEntry> | undefined
         let attempted = 0
         setEntryMapRaw((prev) => {
-          let changed = false
-          const next = new Map(prev)
+          const cleared = loadClearedIds(props.sessionId)
+          const next = withoutClearedEntries(prev, cleared)
+          let changed = next.size !== prev.size
           // 每 ~4s 从本地库同步衍生会话（spawn）：没有对应工具条目的
           // 子会话补成 sub: 条目（标题/agent/用量/终态都来自数据库）。
           if (tick % 4 === 0) {
             try {
-              const children = props.api.session.listChildren?.(props.sessionId)
+              const linked = new Set<string>()
+              for (const e of next.values()) if (e.sessionId) linked.add(e.sessionId)
+              const excluded = new Set(linked)
+              for (const id of cleared) if (id.startsWith("sub:")) excluded.add(id.slice(4))
+              const children = props.api.session.listChildren?.(props.sessionId, excluded)
               if (children) {
-                const linked = new Set<string>()
-                for (const e of next.values()) if (e.sessionId) linked.add(e.sessionId)
-                const { parentSid, isChild } = resolveParent(props.sessionId)
-                const rec = loadSessionData()[parentSid]
-                const cleared = new Set<string>(isChild ? rec?.children?.[props.sessionId]?.clearedIds : rec?.clearedIds)
                 for (const child of children) {
                   if (!child.id || linked.has(child.id)) continue
                   const id = `sub:${child.id}`
@@ -1202,6 +1216,7 @@ export function SubAgentPanel(props: {
                 } catch {}
               }
               if (!entry.sessionId) continue
+              if (isSubEntryCleared(entry, cleared)) { next.delete(id); changed = true; continue }
               const childSid = entry.sessionId
               // 只从子会话读取，绝不读父会话。较旧的子会话
               // 可能不在本地缓存中，此时它们仍属于
@@ -1272,15 +1287,19 @@ export function SubAgentPanel(props: {
           }
         })
       }
-      bump()
     }, 1000)
     bump()
 
     const unsubPart = props.api.event.on("part.updated", (e) => {
+      if (!isCurrentSessionEvent(props.sessionId, e)) return
       handlePartUpdated(e)
       bump()
     })
-    const unsubMsg = props.api.event.on("message.updated", () => { bump(); scheduleRescan() })
+    const unsubMsg = props.api.event.on("message.updated", (e) => {
+      if (!isCurrentSessionEvent(props.sessionId, e)) return
+      bump()
+      scheduleRescan()
+    })
     const unsubIdle = props.api.event.on("session.idle", (e) => {
       handleSessionEnd(e, "done")
       bump()
@@ -1305,16 +1324,27 @@ export function SubAgentPanel(props: {
   // On session change: load from kv (entries survive component unmount), then scan+merge.
   // On same session: only scan+merge (keep event‑driven running entries).
   let lastSid = props.sessionId
-  let lastTick = 0
+  let lastTick = untrack(() => clearNotice()?.revision ?? 0)
   createEffect(() => {
     const sid = props.sessionId
     const switched = sid !== lastSid
     lastSid = sid
-    const tick = clearTick()    // 外部触发清除时 +1，effect 重跑
-    const forceReload = tick !== lastTick && !switched
+    const notice = clearNotice()
+    const tick = notice?.revision ?? 0
+    const forceReload = tick !== lastTick && notice?.sessionId === sid && !switched
     lastTick = tick
     // 清除触发重扫：丢弃清除前排队的 debounce 快照，防止旧 map 回填。
-    if (forceReload) clearTimeout(persistTimer)
+    if (forceReload) {
+      clearTimeout(persistTimer)
+      clearTimeout(rescanTimer)
+      untrack(() => {
+        const restored = loadEntries(sid)
+        setEntryMapRaw(restored)
+        globalEntryCache.set(sid, new Map(restored))
+        setScrollOffset(0)
+        setExpanded(undefined)
+      })
+    }
 
     let attempts = 0
     let retryTimer: ReturnType<typeof setTimeout> | undefined
@@ -1367,6 +1397,12 @@ export function SubAgentPanel(props: {
       error: sat("error", FALLBACK.error),
       border: sat("border", FALLBACK.border),
     }
+  })
+
+  // One color computation per frame, shared by the visible header and rows.
+  const runningColor = createMemo(() => {
+    if (!hasRunningEntries()) return pal().warning
+    return breathingColor(now(), pal().muted, pal().warning)
   })
 
   // ── derived signals ──
@@ -1430,14 +1466,6 @@ export function SubAgentPanel(props: {
         try { persistScroll(props.sessionId, target) } catch {}
       }, 0)
     }
-  })
-
-  const entries = createMemo(() => {
-    const nowVal = now()
-    return entryList().map((e) => ({
-      ...e,
-      elapsed: (e.endedAt ?? nowVal) - e.startedAt,
-    }))
   })
 
   const doneCount = createMemo(() => entryList().filter((e) => e.status === "done" || e.status === "cancelled").length)
@@ -1588,7 +1616,7 @@ export function SubAgentPanel(props: {
             <span style={{ fg: pal().muted }}>{" ".repeat(spacerCols())}</span>
             <span style={{ fg: pal().success }}>{summaryParts()!.done}</span>
             {runningCount() > 0 && (
-              <span style={{ fg: pal().warning }}> {summaryParts()!.running}</span>
+              <span style={{ fg: runningColor() }}> {summaryParts()!.running}</span>
             )}
             {errCount() > 0 && (
               <span style={{ fg: pal().error }}> {summaryParts()!.err}</span>
@@ -1668,13 +1696,7 @@ export function SubAgentPanel(props: {
               const statusColor = () => {
                 if (isCancelled) return pal().muted
                 if (!isActiveRunning) return isError ? pal().error : pal().success
-                const t = (Math.sin(((now() % 2000) / 2000) * Math.PI * 2 - Math.PI / 2) + 1) / 2
-                const a = rgb(pal().muted), b = rgb(pal().warning)
-                if (!a || !b) return pal().warning
-                const r = Math.round(a.r + (b.r - a.r) * t)
-                const g = Math.round(a.g + (b.g - a.g) * t)
-                const bl = Math.round(a.b + (b.b - a.b) * t)
-                return "#" + [r, g, bl].map((v) => Math.max(0, Math.min(255, v)).toString(16).padStart(2, "0")).join("")
+                return runningColor()
               }
 
               const timeColor = () =>

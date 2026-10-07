@@ -39,7 +39,7 @@ export interface SessionDbIndex {
   /** 子会话汇总（model/tokens/cost/time_idle）。 */
   info(sid: string): ChildSessionInfo | undefined
   /** 该会话派生的子会话（spawn），用于补全没有工具条目的衍生会话。 */
-  children(parentId: string): ChildSessionInfo[] | undefined
+  children(parentId: string, excludedSessionIds?: ReadonlySet<string>): ChildSessionInfo[] | undefined
 }
 
 type SqlRow = Record<string, unknown>
@@ -180,6 +180,31 @@ const num = (v: unknown): number | undefined => {
 }
 const str = (v: unknown): string | undefined => (typeof v === "string" && v.length > 0 ? v : undefined)
 
+/** Filter before expensive per-child usage/status queries, not after hydration. */
+export function hydrateChildSessions(
+  rows: Iterable<SqlRow>,
+  parentId: string,
+  info: (sid: string) => ChildSessionInfo | undefined,
+  excludedSessionIds?: ReadonlySet<string>,
+): ChildSessionInfo[] {
+  const out: ChildSessionInfo[] = []
+  for (const row of rows) {
+    const sid = str(row.id)
+    if (!sid || excludedSessionIds?.has(sid)) continue
+    const full = info(sid)
+    if (full) { out.push(full); continue }
+    const agg = (num(row.tokens_input) || 0) + (num(row.tokens_output) || 0) + (num(row.tokens_reasoning) || 0) +
+      (num(row.tokens_cache_read) || 0) + (num(row.tokens_cache_write) || 0)
+    out.push({
+      id: sid, parentId,
+      agent: str(row.agent), title: str(row.title), model: modelIdOf(row.model),
+      cost: num(row.cost), tokens: agg > 0 ? agg : undefined,
+      timeCreated: num(row.time_created), timeIdle: num(row.time_idle), idleOutcome: str(row.idle_outcome),
+    })
+  }
+  return out
+}
+
 export function createSessionDbIndex(enabled: () => boolean): SessionDbIndex | undefined {
   const dbPath = findDbPath()
   if (!dbPath) return undefined
@@ -307,7 +332,7 @@ export function createSessionDbIndex(enabled: () => boolean): SessionDbIndex | u
     return result
   }
 
-  const children = (parentId: string): ChildSessionInfo[] | undefined => {
+  const children = (parentId: string, excludedSessionIds?: ReadonlySet<string>): ChildSessionInfo[] | undefined => {
     if (!ready() || !parentId) return undefined
     const now = Date.now()
     let cached = childrenCache.get(parentId)
@@ -317,29 +342,7 @@ export function createSessionDbIndex(enabled: () => boolean): SessionDbIndex | u
       cached = { list, at: now }
       childrenCache.set(parentId, cached)
     }
-    const out: ChildSessionInfo[] = []
-    for (const row of cached.list) {
-      const sid = str(row.id)
-      if (!sid) continue
-      const full = info(sid)
-      if (full) { out.push(full); continue }
-      // info 缓存未命中时不丢字段：用列表行自身的汇总兜底。
-      const agg = (num(row.tokens_input) || 0) + (num(row.tokens_output) || 0) + (num(row.tokens_reasoning) || 0) +
-        (num(row.tokens_cache_read) || 0) + (num(row.tokens_cache_write) || 0)
-      out.push({
-        id: sid,
-        parentId,
-        agent: str(row.agent),
-        title: str(row.title),
-        model: modelIdOf(row.model),
-        cost: num(row.cost),
-        tokens: agg > 0 ? agg : undefined,
-        timeCreated: num(row.time_created),
-        timeIdle: num(row.time_idle),
-        idleOutcome: str(row.idle_outcome),
-      })
-    }
-    return out
+    return hydrateChildSessions(cached.list, parentId, info, excludedSessionIds)
   }
 
   return { enabled: ready, resolveCall, matchChild, info, children }

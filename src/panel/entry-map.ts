@@ -126,9 +126,18 @@ export function compactSubEntry(entry: SubEntry): SubEntry {
   return { ...entry, prompt: prompt.slice(0, PERSISTED_PROMPT_MAX) }
 }
 
+/** A child can be discovered as tool:<call>, sub:<session>, or another call alias. */
+export function isSubEntryCleared(
+  entry: Pick<SubEntry, "id" | "sessionId">,
+  clearedIds: ReadonlySet<string> | undefined,
+): boolean {
+  return Boolean(clearedIds?.has(entry.id) ||
+    (entry.sessionId && clearedIds?.has(`sub:${entry.sessionId}`)))
+}
+
 /**
  * 持久化合并——所有 KV 写入路径的唯一入口：
- * 1. 剔除 id 已进入 `clearedIds` 的条目（手动清除名单是持久化层权威，
+ * 1. 剔除 id 或子会话已进入 `clearedIds` 的条目（手动清除名单是持久化层权威，
  *    过期快照/debounce 写入都不得把它们合并回去）；
  * 2. 压缩载荷（prompt 截断），base 里的存量胖数据也顺带清理。
  */
@@ -138,7 +147,7 @@ export function mergeSubEntriesForPersist(
   clearedIds: readonly string[] | undefined,
 ): Map<string, SubEntry> {
   const cleared = new Set(clearedIds ?? [])
-  const keep = (entry: SubEntry) => !cleared.has(entry.id)
+  const keep = (entry: SubEntry) => !isSubEntryCleared(entry, cleared)
   return mergeSubEntries(
     [...base].filter(keep).map(compactSubEntry),
     [...incoming].filter(keep).map(compactSubEntry),
@@ -148,8 +157,8 @@ export function mergeSubEntriesForPersist(
 /**
  * 从清除名单中筛出可安全移除的 id——它们不会再被扫描/轮询重建：
  * - `tool:`：对应 part 已确认状态为 error（扫描从不为 error part 建条目）；
- * - `sub:`：子会话已不在权威存活列表里（轮询只重建存活子会话）。
- * `liveChildIds` 未提供（本地库不可用）时不碰 `sub:` id。
+ * `sub:` 现在也是子会话身份 tombstone，历史 tool part 仍可引用已删除的
+ * 子会话；即使数据库列表里没有它也不能移除，否则别名会被扫描重建。
  */
 export function prunableClearedIds(input: {
   clearedIds: Iterable<string>
@@ -160,15 +169,13 @@ export function prunableClearedIds(input: {
   for (const id of input.clearedIds) {
     if (id.startsWith("tool:")) {
       if (input.errorToolIds?.has(id)) out.push(id)
-    } else if (id.startsWith("sub:")) {
-      if (input.liveChildIds !== undefined && !input.liveChildIds.has(id.slice(4))) out.push(id)
     }
   }
   return out
 }
 
 /**
- * 从条目集合中移除 id 已清除的条目（保留原有 Map 键）。
+ * 从条目集合中移除 id 或子会话已清除的条目（保留原有 Map 键）。
  * 扫描入口调用：防止 `globalEntryCache` / KV 中残留的已清除
  * 条目在 replace=false 的合并扫描中继续存活。
  */
@@ -179,7 +186,7 @@ export function withoutClearedEntries(
   const next = new Map(entries)
   if (!clearedIds || clearedIds.size === 0) return next
   for (const [key, entry] of next) {
-    if (clearedIds.has(entry.id)) next.delete(key)
+    if (isSubEntryCleared(entry, clearedIds)) next.delete(key)
   }
   return next
 }

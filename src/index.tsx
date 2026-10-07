@@ -17,7 +17,8 @@ import { TIME_FORMATS, TIME_FORMAT_SAMPLES } from "./core/format"
 import type { PanelApi } from "./panel/panel-api"
 import { SubAgentPanel } from "./panel/SubAgentPanel"
 import { mergeSubEntriesForPersist } from "./panel/entry-map"
-import { globalEntryCache, setClearTick } from "./panel/store"
+import { clearSessionEntries } from "./panel/clear-history"
+import { globalEntryCache, notifySessionCleared } from "./panel/store"
 
 // Plugin entry
 // ===================================================================
@@ -433,8 +434,6 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       onSelect: (dialog) => {
         const t = createT(() => signals.lang())
         const sid = signals.sessionId
-        const sessionObj = api.state.session.get(sid)
-        const parentID = (sessionObj as any)?.parentID as string | undefined
         // 检查是否存在运行中的条目
         const cached = globalEntryCache.get(sid)
         let runningCount = 0
@@ -448,49 +447,16 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
           <api.ui.DialogConfirm
             title={t("clear.title")}
             message={msg}
-            onConfirm={() => {
+            onConfirm={async () => {
               try {
-                const data = JSON.parse(String(api.kv.get(`${KV_PREFIX}.session_data`, "{}")))
-                // 内存缓存可能含尚未落盘的条目——一并计入清除名单，
-                // 防止它们随后被 merge 回 KV（见 SubAgentPanel 的持久化过滤）。
-                const cachedIds = [...(globalEntryCache.get(sid)?.values() ?? [])].map((e: any) => e.id)
-                let count = 0
-                if (parentID) {
-                  if (data[parentID]?.children?.[sid] || cachedIds.length > 0) {
-                    if (!data[parentID]) {
-                      data[parentID] = { ts: Date.now(), entries: [], scroll: 0, expanded: "", children: {} }
-                    }
-                    if (!data[parentID].children) data[parentID].children = {}
-                    if (!data[parentID].children[sid]) {
-                      data[parentID].children[sid] = { scroll: 0, expanded: "", entries: [] }
-                    }
-                    const child = data[parentID].children[sid]
-                    const ids = [...new Set([...(child.entries?.map((e: any) => e.id) ?? []), ...cachedIds])]
-                    count = ids.length
-                    child.entries = []
-                    child.scroll = 0
-                    child.expanded = ""
-                    child.clearedIds = [...new Set([...(child.clearedIds ?? []), ...ids])]
-                  }
-                } else {
-                  if (data[sid] || cachedIds.length > 0) {
-                    if (!data[sid]) {
-                      data[sid] = { ts: Date.now(), entries: [], scroll: 0, expanded: "", children: {} }
-                    }
-                    const ids = [...new Set([...(data[sid].entries?.map((e: any) => e.id) ?? []), ...cachedIds])]
-                    count = ids.length
-                    data[sid].entries = []
-                    data[sid].scroll = 0
-                    data[sid].expanded = ""
-                    data[sid].clearedIds = [...new Set([...(data[sid].clearedIds ?? []), ...ids])]
-                  }
-                }
-                api.kv.set(`${KV_PREFIX}.session_data`, JSON.stringify(data))
+                const count = await clearSessionEntries(v1Api, sid, globalEntryCache.get(sid)?.values() ?? [])
                 globalEntryCache.delete(sid)
-                setClearTick((v) => v + 1)
+                notifySessionCleared(sid)
                 const msg = t("clear.done", { n: count })
                 api.ui.toast({ message: msg })
-              } catch {}
+              } catch {
+                api.ui.toast({ message: t("clear.failed") })
+              }
               dialog?.clear()
             }}
           />
