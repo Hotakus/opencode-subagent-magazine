@@ -959,7 +959,14 @@ export function SubAgentPanel(props: {
                 if (!rawStatus) {
                   const msgTokens = (msg as any)?.tokens as Record<string, unknown> | undefined
                   if (msgTokens && (Number(msgTokens.input) > 0 || Number(msgTokens.output) > 0)) {
-                    status = "done"  // LLM returned tokens → agent completed
+                    // LLM returned tokens — agent may have completed, but verify
+                    // the child session is actually idle before settling.
+                    if (scanSubSid) {
+                      try {
+                        const childStatus = props.api.session.status(scanSubSid)
+                        if (childStatus && childStatus.type !== "idle") status = "running"
+                      } catch {}
+                    }
                   } else {
                     // 无终态证据时不猜测：等本地库/事件回填子会话状态后由 reconcile 落定。
                     continue
