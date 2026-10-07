@@ -1,6 +1,6 @@
 import type { Context, KeymapCommand } from "./types"
 import type { PanelApi } from "../panel/panel-api"
-import type { Lang, SharedSignals, SubStatus, TimeFormat } from "../core/types"
+import type { Lang, RefreshMode, SharedSignals, SubStatus, TimeFormat } from "../core/types"
 import { TIME_FORMATS, TIME_FORMAT_SAMPLES } from "../core/format"
 import { KV_PREFIX, SETTING_KEYS, updateSessionData, readTTLDays } from "../core/kv"
 import { PLUGIN_VERSION } from "../_version"
@@ -88,6 +88,27 @@ export function makeCommands(
       },
     },
     {
+      id: "opencode-subagent-magazine.subagent.refresh",
+      title: "SubAgent Magazine: Refresh Mode",
+      description: "Set sidebar refresh mode (smooth 100ms / eco 1s)",
+      slash: { name: "subagent-refresh" },
+      palette: true,
+      run: async () => {
+        const mode = await context.ui.dialog.select<RefreshMode>({
+          title: t("settings.refresh"),
+          options: [
+            { title: t("refresh.smooth"), value: "smooth" },
+            { title: t("refresh.eco"), value: "eco" },
+          ],
+          current: signals.refreshMode(),
+        })
+        if (!mode) return
+        signals.setRefreshMode(mode)
+        kv.set(SETTING_KEYS.refreshMode, mode)
+        api.ui.toast(`${t("settings.refresh")}: ${mode === "eco" ? t("refresh.eco") : t("refresh.smooth")}`)
+      },
+    },
+    {
       id: "opencode-subagent-magazine.subagent.max",
       title: "SubAgent Magazine: Max Entries",
       description: "Set max visible sub-agent entries in sidebar",
@@ -120,6 +141,7 @@ export function makeCommands(
           `${t("settings.max")}: ${signals.maxEntries()}`,
           `${t("settings.order")}: ${signals.sortOrder() === "desc" ? t("order.desc") : t("order.asc")}`,
           `${t("settings.scroll")}: ${signals.scrollMode() === "wheel" ? t("scroll.wheel") : t("scroll.click")}`,
+          `${t("settings.refresh")}: ${signals.refreshMode() === "eco" ? t("refresh.eco") : t("refresh.smooth")}`,
           `${t("settings.ttl")}: ${ttl === 0 ? t("ttl.unlimited") : `${ttl}d`}`,
           `${t("settings.border")}: ${onOff(signals.borderVisible())}`,
           `${t("settings.showEntryCost")}: ${onOff(signals.showEntryCost())}`,

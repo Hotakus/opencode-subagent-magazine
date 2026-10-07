@@ -14,7 +14,7 @@ import {
 import { PLUGIN_VERSION } from "../_version"
 import { copyText } from "../clipboard"
 import { createT } from "../i18n"
-import type { Lang, SortOrder, ScrollMode, SubEntry, SubStatus, SessionRecord, TimeFormat } from "../core/types"
+import type { Lang, RefreshMode, SortOrder, ScrollMode, SubEntry, SubStatus, SessionRecord, TimeFormat } from "../core/types"
 import { SUBAGENT_TOOLS, isBackgroundInput } from "../core/types"
 import { visualWidth, truncate, fmtDuration, fmtTokens, safeErrorMsg } from "../core/format"
 import { rgb, desaturateTo, dimColor, FALLBACK, MAX_SAT } from "../core/color"
@@ -58,6 +58,7 @@ export function SubAgentPanel(props: {
   maxEntries: () => number
   sortOrder: () => SortOrder
   scrollMode: () => ScrollMode
+  refreshMode: () => RefreshMode
   borderVisible: () => boolean
   showEntryCost: () => boolean
   showEntryTime: () => boolean
@@ -1104,9 +1105,15 @@ export function SubAgentPanel(props: {
   let enrichCursor = 0
 
   onMount(() => {
-    // Fast clock for smooth time display, separate from token polling
-    const clock = setInterval(() => { setNow(Date.now()); bump() }, 100)
-    // Token poll — runs every 500ms for running entries
+    // 刷新模式（/subagent-refresh）：
+    //  - smooth：100ms 时钟——耗时带两位小数（如 1.23s），呼吸动效需要高频重绘（默认）；
+    //  - eco：1s 时钟——省电模式，耗时按整秒显示，动效按秒更新。
+    createEffect(() => {
+      const ms = props.refreshMode() === "eco" ? 1000 : 100
+      const clock = setInterval(() => { setNow(Date.now()); bump() }, ms)
+      onCleanup(() => clearInterval(clock))
+    })
+    // Token poll — runs every 1s for running entries
     let tick = 0
     const tokenTimer = setInterval(() => {
       tick++
@@ -1116,7 +1123,7 @@ export function SubAgentPanel(props: {
         setEntryMapRaw((prev) => {
           let changed = false
           const next = new Map(prev)
-          // 每 ~2s 从本地库同步衍生会话（spawn）：没有对应工具条目的
+          // 每 ~4s 从本地库同步衍生会话（spawn）：没有对应工具条目的
           // 子会话补成 sub: 条目（标题/agent/用量/终态都来自数据库）。
           if (tick % 4 === 0) {
             try {
@@ -1266,7 +1273,7 @@ export function SubAgentPanel(props: {
         })
       }
       bump()
-    }, 500)
+    }, 1000)
     bump()
 
     const unsubPart = props.api.event.on("part.updated", (e) => {
@@ -1286,7 +1293,6 @@ export function SubAgentPanel(props: {
     onCleanup(() => {
       disposed = true
       clearTimeout(rescanTimer)
-      clearInterval(clock)
       clearInterval(tokenTimer)
       unsubPart()
       unsubMsg()
@@ -1685,7 +1691,7 @@ export function SubAgentPanel(props: {
                   : ""
               const timeText = () =>
                 !isExpanded() && props.showEntryTime() && (elapsed() >= 2000 || entry.endedAt !== undefined)
-                  ? fmtDuration(elapsed(), isActiveRunning, props.timeFormat())
+                  ? fmtDuration(elapsed(), isActiveRunning, props.timeFormat(), { coarse: props.refreshMode() === "eco" })
                   : ""
               // 来源标记：⇢ = 后台衍生（工具输入 background），↳ = 衍生会话（spawn）。
               const originMark = () => {
@@ -1772,7 +1778,7 @@ export function SubAgentPanel(props: {
                         <span style={{ fg: pal().primary }}>{t("time.label")}: </span>
                         <span style={{ fg: pal().muted }}>{" ".repeat(expandedPad(t("time.label")))}</span>
                         <span style={{ fg: pal().muted }}>
-                          {fmtDuration(elapsed(), isActiveRunning, props.timeFormat())}
+                          {fmtDuration(elapsed(), isActiveRunning, props.timeFormat(), { coarse: props.refreshMode() === "eco" })}
                         </span>
                       </text>
                     </Show>

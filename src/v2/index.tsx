@@ -7,9 +7,9 @@ import { makeCommands } from "./commands"
 import { mapTheme } from "./theme"
 import { SubAgentPanel } from "../panel/SubAgentPanel"
 import type { PanelApi } from "../panel/panel-api"
-import type { Lang, SortOrder, ScrollMode, SharedSignals, TimeFormat } from "../core/types"
+import type { Lang, RefreshMode, SortOrder, ScrollMode, SharedSignals, TimeFormat } from "../core/types"
 import { TIME_FORMATS } from "../core/format"
-import { SETTING_KEYS } from "../core/kv"
+import { SETTING_KEYS, readRefreshMode } from "../core/kv"
 import { LANG_META, detectLang } from "../i18n"
 
 /** 命令层必须在 app 槽注册：侧栏隐藏（sidebar: auto）时命令仍需可用。 */
@@ -40,6 +40,7 @@ function PluginRoot(props: {
       maxEntries={props.signals.maxEntries}
       sortOrder={props.signals.sortOrder}
       scrollMode={props.signals.scrollMode}
+      refreshMode={props.signals.refreshMode}
       borderVisible={props.signals.borderVisible}
       showEntryCost={props.signals.showEntryCost}
       showEntryTime={props.signals.showEntryTime}
@@ -80,6 +81,7 @@ const mod: PluginModule & { server: () => Promise<Record<string, never>> } = {
     const [scrollSignal, setScrollMode] = createSignal<ScrollMode>(
       String(api.kv.get(SETTING_KEYS.scrollMode, "wheel")) === "click" ? "click" : "wheel",
     )
+    const [refreshSignal, setRefreshMode] = createSignal<RefreshMode>(readRefreshMode(api.kv))
     const [borderSignal, setBorderVisible] = createSignal<boolean>(
       (api.kv.get(SETTING_KEYS.border, false) as boolean) === true,
     )
@@ -108,7 +110,7 @@ const mod: PluginModule & { server: () => Promise<Record<string, never>> } = {
     scrollMode = scrollSignal
 
     const signals: SharedSignals = {
-      lang, setLang, maxEntries, setMaxEntries, sortOrder, setSortOrder, scrollMode, setScrollMode, borderVisible: borderSignal, setBorderVisible,
+      lang, setLang, maxEntries, setMaxEntries, sortOrder, setSortOrder, scrollMode, setScrollMode, refreshMode: refreshSignal, setRefreshMode, borderVisible: borderSignal, setBorderVisible,
       showEntryCost: showEntryCostSignal, setShowEntryCost,
       showEntryTime: showEntryTimeSignal, setShowEntryTime,
       showEntryTokens: showEntryTokensSignal, setShowEntryTokens,

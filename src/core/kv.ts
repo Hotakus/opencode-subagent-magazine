@@ -1,4 +1,4 @@
-import type { SessionRecord } from "./types"
+import type { RefreshMode, SessionRecord } from "./types"
 
 export const KV_PREFIX = "subagent_magazine"
 export const SESSION_DATA_KEY = `${KV_PREFIX}.session_data`
@@ -22,6 +22,7 @@ export const SETTING_KEYS = {
   maxEntries: `${KV_PREFIX}.max_entries`,
   order: `${KV_PREFIX}.order`,
   scrollMode: `${KV_PREFIX}.scroll_mode`,
+  refreshMode: `${KV_PREFIX}.refresh_mode`,
   open: `${KV_PREFIX}.open`,
   ttlDays: `${KV_PREFIX}.ttl_days`,
   border: `${KV_PREFIX}.border`,
@@ -75,4 +76,9 @@ function parseSessionData(raw: unknown): Record<string, SessionRecord> {
 export function readTTLDays(kv: KVApi): number {
   const ttlDaysRaw = parseInt(String(kv.get(SETTING_KEYS.ttlDays, "3")), 10)
   return Number.isNaN(ttlDaysRaw) ? 3 : ttlDaysRaw
+}
+
+/** 读取面板刷新模式（默认流畅；未知值回退为流畅）。 */
+export function readRefreshMode(kv: KVApi): RefreshMode {
+  return String(kv.get(SETTING_KEYS.refreshMode, "smooth")) === "eco" ? "eco" : "smooth"
 }

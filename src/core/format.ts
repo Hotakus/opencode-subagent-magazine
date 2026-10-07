@@ -61,12 +61,22 @@ export const TIME_FORMAT_SAMPLES: Record<TimeFormat, string> = {
   seconds: "45s · 6755s",
 }
 
+/** `coarse: true` renders whole seconds (eco refresh mode: sub-second digits are meaningless). */
+export interface FmtDurationOptions {
+  coarse?: boolean
+}
+
 /** Formats elapsed milliseconds using the configured display mode. */
-export function fmtDuration(ms: number, running: boolean, mode: TimeFormat = "short"): string {
+export function fmtDuration(ms: number, running: boolean, mode: TimeFormat = "short", options: FmtDurationOptions = {}): string {
   if (running && ms < 2000) return ""
   const t = Number.isFinite(ms) && ms > 0 ? ms : 0
+  const coarse = options.coarse === true
   switch (mode) {
     case "short":
+      if (coarse) {
+        if (t < 60000) return `${Math.floor(t / 1000)}s`
+        return `${Math.floor(t / 60000)}m${Math.floor((t % 60000) / 1000)}s`
+      }
       return fmtDurationShort(t, false)
     case "compact": {
       if (t < 60000) return `${Math.floor(t / 1000)}s`
@@ -83,6 +93,11 @@ export function fmtDuration(ms: number, running: boolean, mode: TimeFormat = "sh
       return `${Math.floor(t / 1000)}s`
     case "decimal":
     default: {
+      if (coarse) {
+        if (t < 60000) return `${Math.floor(t / 1000)}s`
+        if (t < 3600000) return `${Math.floor(t / 60000)}m`
+        return `${Math.floor(t / 3600000)}h`
+      }
       // Promote units when rounding would show "60.0s" / "60.0m".
       if (t < 59950) return `${(t / 1000).toFixed(1)}s`
       if (t < 3597000) return `${(t / 60000).toFixed(1)}m`

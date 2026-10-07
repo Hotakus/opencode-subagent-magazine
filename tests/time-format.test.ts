@@ -50,3 +50,18 @@ test("short is the first mode and every mode has a printable sample", () => {
     assert.ok(TIME_FORMAT_SAMPLES[mode].length > 0)
   }
 })
+
+test("fmtDuration coarse drops sub-second digits for eco refresh", () => {
+  assert.equal(fmtDuration(45_320, false, "short", { coarse: true }), "45s")
+  assert.equal(fmtDuration(5_950, false, "short", { coarse: true }), "5s")
+  assert.equal(fmtDuration(6_755_000, false, "short", { coarse: true }), "112m35s")
+  assert.equal(fmtDuration(45_900, false, "decimal", { coarse: true }), "45s")
+  assert.equal(fmtDuration(570_000, false, "decimal", { coarse: true }), "9m")
+  assert.equal(fmtDuration(6_840_000, false, "decimal", { coarse: true }), "1h")
+  // 其它格式本就是整秒，coarse 不改变结果。
+  assert.equal(fmtDuration(572_000, false, "clock", { coarse: true }), "9:32")
+  assert.equal(fmtDuration(572_000, false, "compact", { coarse: true }), "9m32s")
+  assert.equal(fmtDuration(45_000, false, "seconds", { coarse: true }), "45s")
+  // 新鲜运行条目仍然隐藏。
+  assert.equal(fmtDuration(1_500, true, "short", { coarse: true }), "")
+})
