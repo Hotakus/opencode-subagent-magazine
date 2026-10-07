@@ -1,7 +1,7 @@
 {
   "date": "2026-10-07",
   "rawResultSHA256": "fa699fed1b5e8bbd8eee2aa7be0d894d8d5654f390391e2865277275814b09f8",
-  "verificationNote": "The original harness falsely rejected upstream paths lacking the package name. All nine unchanged profiles were revalidated with the corrected, regression-tested filter. Original measurements and profiles are preserved locally.",
+  "verificationNote": "The original harness falsely rejected upstream paths lacking the package name. All nine unchanged profiles were revalidated. Later configuration review found that inline arrays replace the global array: these original trials explicitly enabled only the selected subagent plugin. A full-plugin rerun is pending. Original measurements and profiles are preserved locally.",
   "method": {
     "opencodeVersion": "2.0.22",
     "platform": "Linux-6.11.0-26-generic-x86_64-with-glibc2.39",
@@ -14,7 +14,7 @@
     "terminalColumns": 180,
     "cpuDefinition": "Percent of one logical CPU core from process user plus system ticks",
     "memoryDefinition": "Mean RSS of the temporary CLI process during the sample, MiB",
-    "allOtherConfiguredPluginsRetained": true,
+    "allOtherConfiguredPluginsRetained": false,
     "historicalSessionEntries": 281,
     "runningEntries": 0,
     "storedRefreshMode": "eco",
@@ -117,7 +117,7 @@
   },
   "validation": {
     "pluginTestsPassed": 75,
-    "benchmarkTestsPassed": 3,
+    "benchmarkTestsPassed": 6,
     "typecheckPassed": true,
     "buildPassed": true,
     "realTuiAnimationScenariosPassed": 3,

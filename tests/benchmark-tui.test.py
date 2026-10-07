@@ -37,5 +37,23 @@ class BenchmarkProfileTests(unittest.TestCase):
         self.assertFalse(self.summary(['file:///opencode/core.js'], 'file:///tmp/pr-base/dist/v2.js')['implementationVerified'])
 
 
+class BenchmarkConfigTests(unittest.TestCase):
+    def test_inline_override_retains_other_plugins_in_their_original_order(self):
+        local = Path('/projects/opencode-subagent-magazine')
+        plugins = ['cache@latest', str(local), {'package': 'other', 'options': {'compact': True}}, '-notifications']
+        self.assertEqual(benchmark.with_subagent_target(plugins, local, '/tmp/base'),
+                         ['cache@latest', '/tmp/base', plugins[2], '-notifications'])
+        self.assertEqual(plugins[1], str(local))
+
+    def test_npm_target_replacement_preserves_its_options(self):
+        plugins = [{'package': 'opencode-subagent-magazine@latest', 'options': {'compact': True}}, 'shell']
+        self.assertEqual(benchmark.with_subagent_target(plugins, ROOT, str(ROOT)),
+                         [{'package': str(ROOT), 'options': {'compact': True}}, 'shell'])
+
+    def test_absent_target_is_appended_without_dropping_existing_plugins(self):
+        self.assertEqual(benchmark.with_subagent_target(['cache', '-notifications'], ROOT, str(ROOT)),
+                         ['cache', '-notifications', str(ROOT)])
+
+
 if __name__ == '__main__':
     unittest.main()

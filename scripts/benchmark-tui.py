@@ -76,9 +76,27 @@ def profile_summary(file, expected_url):
     }
 
 
+def with_subagent_target(plugins, local, target):
+    """Inline arrays replace global arrays: retain every unrelated directive."""
+    packages = {str(local.resolve()), local.resolve().as_uri()}
+    result = []
+    replaced = False
+    for entry in plugins:
+        package = entry if isinstance(entry, str) else entry.get('package', '')
+        if package in packages or package == 'opencode-subagent-magazine' or package.startswith('opencode-subagent-magazine@'):
+            if not replaced:
+                result.append({**entry, 'package': target} if isinstance(entry, dict) else target)
+                replaced = True
+        else:
+            result.append(entry)
+    if not replaced:
+        result.append(target)
+    return result
+
+
 def run(args, label, target, expected_url, logs):
     mode_before = refresh_mode()
-    inline = {'plugins': [target], 'tabs': {'mode': 'off'}}
+    inline = {'plugins': with_subagent_target(args.plugins, args.local, target), 'tabs': {'mode': 'off'}}
     env = {**os.environ, 'TERM': 'xterm-256color', 'COLORTERM': 'truecolor',
            'OPENCODE_CLI_CONFIG_CONTENT': json.dumps(inline)}
     master, slave = pty.openpty()
@@ -161,13 +179,15 @@ def main():
         raise SystemExit('Session verification failed; no temporary TUI started')
     config = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'opencode/cli.json'
     logs = Path(os.environ.get('XDG_DATA_HOME', Path.home() / '.local/share')) / 'opencode/log'
+    args.plugins = json.loads(config.read_text()).get('plugins', []) if config.exists() else []
     report = {'method': {
         'opencodeVersion': subprocess.check_output(['opencode', '--version'], text=True).strip(),
         'platform': platform.platform(), 'warmupSeconds': args.warmup, 'sampleSeconds': args.seconds,
         'roundsPerVariant': args.rounds, 'terminalRows': 52, 'terminalColumns': 180,
         'cpuDefinition': 'Percent of one logical CPU core from /proc/<pid>/stat',
         'memoryDefinition': 'Mean RSS of the temporary CLI process during the sample, MiB',
-        'allOtherConfiguredPluginsRetained': True, 'promptsSent': 0, 'historyClearCommands': 0,
+        'allOtherConfiguredPluginsRetained': True, 'configuredPluginDirectives': len(args.plugins),
+        'promptsSent': 0, 'historyClearCommands': 0,
         'cliConfigSHA256': hashlib.sha256(config.read_bytes()).hexdigest() if config.exists() else None,
         'localBundleSHA256': hashlib.sha256((args.local / 'dist/v2.js').read_bytes()).hexdigest(),
         'baseBundleSHA256': hashlib.sha256((args.base / 'dist/v2.js').read_bytes()).hexdigest(),
