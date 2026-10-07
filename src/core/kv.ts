@@ -53,20 +53,18 @@ export function updateSessionData(
   kv: KVApi,
   mutator: (data: Record<string, SessionRecord>) => void,
 ): void | Promise<void> {
-  try {
-    if (typeof kv.update === "function") {
-      return kv.update(SESSION_DATA_KEY, (raw) => {
-        const data = parseSessionData(raw)
-        mutator(data)
-        return JSON.stringify(data)
-      })
-    }
-    // Fallback (V1 hosts without atomic update): read-modify-write. The window
-    // is small and the mutation is merged against the value we just read.
-    const data = loadSessionData(kv)
-    mutator(data)
-    kv.set(SESSION_DATA_KEY, JSON.stringify(data))
-  } catch {}
+  if (typeof kv.update === "function") {
+    return kv.update(SESSION_DATA_KEY, (raw) => {
+      const data = parseSessionData(raw)
+      mutator(data)
+      return JSON.stringify(data)
+    })
+  }
+  // Fallback (V1 hosts without atomic update): read-modify-write. The window
+  // is small and the mutation is merged against the value we just read.
+  const data = loadSessionData(kv)
+  mutator(data)
+  kv.set(SESSION_DATA_KEY, JSON.stringify(data))
 }
 
 function parseSessionData(raw: unknown): Record<string, SessionRecord> {

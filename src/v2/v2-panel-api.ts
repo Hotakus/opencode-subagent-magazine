@@ -450,8 +450,8 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
           return dbIndex?.matchChild(input.parentId, input.agent, input.startedAt)
         } catch { return undefined }
       },
-      listChildren: (parentId) => {
-        try { return dbIndex?.enabled() ? dbIndex.children(parentId) : undefined } catch { return undefined }
+      listChildren: (parentId, excludedSessionIds) => {
+        try { return dbIndex?.enabled() ? dbIndex.children(parentId, excludedSessionIds) : undefined } catch { return undefined }
       },
     },
     event: {
@@ -478,7 +478,10 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
           case "message.updated": {
             const unsubs: Array<() => void> = []
             for (const evt of ["session.step.started", "session.step.ended", "session.step.failed"]) {
-              unsubs.push(context.data.on(evt, () => cb({ type })))
+              unsubs.push(context.data.on(evt, (e) => {
+                const sid = (e as Record<string, any>)?.data?.sessionID
+                cb({ type, scope: "global", payload: { sessionID: sid == null ? undefined : String(sid) } })
+              }))
             }
             return () => { for (const u of unsubs) u() }
           }

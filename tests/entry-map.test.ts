@@ -121,14 +121,14 @@ test("short prompts pass through untouched", () => {
   assert.equal(merged.get("tool:short")?.prompt, "curto")
 })
 
-test("prunableClearedIds drops error tool ids and missing child sessions", () => {
+test("prunableClearedIds keeps missing child identities because historical tools can reference them", () => {
   const prunable = prunableClearedIds({
     clearedIds: ["tool:call_err", "tool:call_ok", "sub:ses_gone", "sub:ses_alive"],
     errorToolIds: new Set(["tool:call_err"]),
     liveChildIds: new Set(["ses_alive"]),
   })
 
-  assert.deepEqual(prunable.sort(), ["sub:ses_gone", "tool:call_err"])
+  assert.deepEqual(prunable, ["tool:call_err"])
 })
 
 test("prunableClearedIds keeps sub ids when the child list is unavailable", () => {
@@ -148,4 +148,22 @@ test("prunableClearedIds leaves live ids alone", () => {
   })
 
   assert.deepEqual(prunable, [])
+})
+
+test("a cleared child session cannot return through a different historical tool call ID", () => {
+  const alternate = entry("tool:another-call", "child-1", "done")
+  const merged = mergeSubEntriesForPersist([], [alternate], ["tool:first-call", "sub:child-1"])
+  assert.equal(merged.size, 0)
+})
+
+test("clear removes a stale cached alias by child-session identity", () => {
+  const cached = new Map([["alias-key", entry("tool:stale-call", "child-1", "done")]])
+  const cleared = withoutClearedEntries(cached, new Set(["sub:child-1"]))
+  assert.equal(cleared.size, 0)
+})
+
+test("cleared child aliases already on disk cannot be healed back by a later save", () => {
+  const base = [entry("tool:old-alias", "child-1", "done")]
+  const merged = mergeSubEntriesForPersist(base, [], ["sub:child-1"])
+  assert.equal(merged.size, 0)
 })

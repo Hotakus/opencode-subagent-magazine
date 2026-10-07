@@ -5,8 +5,9 @@ import { TIME_FORMATS, TIME_FORMAT_SAMPLES } from "../core/format"
 import { KV_PREFIX, SETTING_KEYS, updateSessionData, readTTLDays } from "../core/kv"
 import { PLUGIN_VERSION } from "../_version"
 import { LANG_META, createT } from "../i18n"
-import { globalEntryCache, setClearTick } from "../panel/store"
+import { globalEntryCache, notifySessionCleared } from "../panel/store"
 import { mergeSubEntriesForPersist } from "../panel/entry-map"
+import { clearSessionEntries } from "../panel/clear-history"
 import { openSettingsMenu } from "./settings-menu"
 
 /** V2 命令（对齐 V1 的 9 个斜杠命令——promise 式对话框）。 */
@@ -370,8 +371,6 @@ export function makeCommands(
       palette: true,
       run: async () => {
         const sid = signals.sessionId
-        const sessionObj = api.session.get(sid)
-        const parentID = (sessionObj as any)?.parentID as string | undefined
         const cached = globalEntryCache.get(sid)
         let runningCount = 0
         if (cached) {
@@ -381,56 +380,19 @@ export function makeCommands(
         const choice = await context.ui.dialog.select<"yes" | "no">({
           title: t("clear.title"),
           options: [
-            { title: t("clear.title"), value: "yes" },
+            { title: t("clear.title"), value: "yes", description: msg },
             { title: t("cancel.label"), value: "no" },
           ],
         })
         if (choice !== "yes") return
-        // 内存缓存可能含尚未落盘的条目——一并计入清除名单，
-        // 防止它们随后被 merge 回 KV（见 SubAgentPanel 的持久化过滤）。
-        const cachedIds = [...(globalEntryCache.get(sid)?.values() ?? [])].map((e) => e.id)
         try {
-          let count = 0
-          const finish = () => {
-            globalEntryCache.delete(sid)
-            setClearTick((v) => v + 1)
-            api.ui.toast(t("clear.done", { n: count }))
-          }
-          const done = updateSessionData(kv, (data) => {
-            if (parentID) {
-              const parent = data[parentID]
-              if (parent?.children?.[sid] || cachedIds.length > 0) {
-                const parentRec = parent ?? (data[parentID] = { ts: Date.now(), entries: [], scroll: 0, expanded: "", children: {} })
-                if (!parentRec.children) parentRec.children = {}
-                const child = parentRec.children[sid] ?? (parentRec.children[sid] = { scroll: 0, expanded: "", entries: [] })
-                const ids = [...new Set([...(child.entries ?? []).map((e) => e.id), ...cachedIds])]
-                count = ids.length
-                child.entries = []
-                child.scroll = 0
-                child.expanded = ""
-                child.clearedIds = [...new Set([...(child.clearedIds ?? []), ...ids])]
-              }
-            } else {
-              const rec = data[sid]
-              if (rec || cachedIds.length > 0) {
-                const target = rec ?? (data[sid] = { ts: Date.now(), entries: [], scroll: 0, expanded: "", children: {} })
-                const ids = [...new Set([...(target.entries ?? []).map((e) => e.id), ...cachedIds])]
-                count = ids.length
-                target.entries = []
-                target.scroll = 0
-                target.expanded = ""
-                target.clearedIds = [...new Set([...(target.clearedIds ?? []), ...ids])]
-              }
-            }
-          })
-          if (done && typeof (done as Promise<void>).then === "function") {
-            void (done as Promise<void>).then(finish, () => {
-              try { api.ui.toast(t("clear.failed")) } catch {}
-            })
-          } else {
-            finish()
-          }
-        } catch {}
+          const count = await clearSessionEntries(api, sid, globalEntryCache.get(sid)?.values() ?? [])
+          globalEntryCache.delete(sid)
+          notifySessionCleared(sid)
+          api.ui.toast(t("clear.done", { n: count }))
+        } catch {
+          api.ui.toast(t("clear.failed"))
+        }
       },
     },
     {

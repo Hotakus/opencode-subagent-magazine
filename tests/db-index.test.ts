@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { contextTokens, createSessionDbIndex, findDbPath, isSessionActive, modelIdOf, statusOfChild } from "../src/v2/db"
+import { contextTokens, createSessionDbIndex, findDbPath, hydrateChildSessions, isSessionActive, modelIdOf, statusOfChild } from "../src/v2/db"
 
 test("contextTokens mirrors the host readSessionTokens semantics", () => {
   assert.equal(contextTokens({ input: 10, output: 5, reasoning: 1, cache: { read: 100, write: 2 } }), 118)
@@ -61,4 +61,26 @@ test("the db index stays inert when bun:sqlite is unavailable", () => {
   assert.equal(index?.resolveCall("ses_parent", "call_1"), undefined)
   assert.equal(index?.matchChild("ses_parent", "bud-coder", Date.now()), undefined)
   assert.equal(index?.info("ses_child"), undefined)
+})
+
+test("discovery does not hydrate cleared or already-linked children", () => {
+  const reads: string[] = []
+  const children = hydrateChildSessions(
+    [{ id: "cleared" }, { id: "linked" }, { id: "fresh" }], "root",
+    (id) => { reads.push(id); return { id, tokens: 10, active: true } },
+    new Set(["cleared", "linked"]),
+  )
+  assert.deepEqual(reads, ["fresh"])
+  assert.deepEqual(children, [{ id: "fresh", tokens: 10, active: true }])
+})
+
+test("unavailable per-child data keeps discovery's original aggregate fallback", () => {
+  const children = hydrateChildSessions([
+    { id: "child", title: "Spawned", model: '{"id":"model"}', cost: 1.5, tokens_input: 10, tokens_output: 2,
+      time_created: 100, time_idle: 200, idle_outcome: "succeeded" },
+  ], "root", () => undefined)
+  assert.deepEqual(children, [{
+    id: "child", parentId: "root", agent: undefined, title: "Spawned", model: "model", cost: 1.5,
+    tokens: 12, timeCreated: 100, timeIdle: 200, idleOutcome: "succeeded",
+  }])
 })

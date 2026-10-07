@@ -1,0 +1,129 @@
+{
+  "date": "2026-10-07",
+  "rawResultSHA256": "c82fe4481942addb7ca75e2332e0ae492b5238b449174c457d47b36d605837cb",
+  "verificationNote": "Final fresh nine-trial run with all seven configured plugin directives retained explicitly. All profiles verified. Earlier single-plugin trials and their initial false verification flags are preserved separately, not mixed into these results.",
+  "method": {
+    "opencodeVersion": "2.0.22",
+    "platform": "Linux-6.11.0-26-generic-x86_64-with-glibc2.39",
+    "cpuModel": "Intel Xeon E5-2690 v3 @ 2.60 GHz",
+    "logicalCpuCount": 48,
+    "warmupSeconds": 20,
+    "sampleSeconds": 13,
+    "roundsPerVariant": 3,
+    "terminalRows": 52,
+    "terminalColumns": 180,
+    "cpuDefinition": "Percent of one logical CPU core from process user plus system ticks",
+    "memoryDefinition": "Mean RSS of the temporary CLI process during the sample, MiB",
+    "allOtherConfiguredPluginsRetained": true,
+    "configuredPluginDirectives": 7,
+    "historicalSessionEntries": 281,
+    "runningEntries": 0,
+    "storedRefreshMode": "eco",
+    "promptsSent": 0,
+    "historyClearCommands": 0,
+    "cliConfigSHA256": "791c71d43f7eb956a00b45e06ef5e1efbad4da3d9f97e3ed28622522e27a890d",
+    "configurationUnchanged": true,
+    "bundlesUnchanged": true
+  },
+  "builds": {
+    "npm": {
+      "version": "1.7.2",
+      "gitHead": "223f2756e03785bc85ee87916b119be779013e8b",
+      "tarballIntegrity": "sha512-Gr5yj+v4LHVdTtJ6mEFEmiir7GzuMlQZOjG/T1dp7W3cdNaatW4qOTlhYvA69RWob/B93RaGBp96WJRwRUvhYw=="
+    },
+    "upstream-base": {
+      "version": "1.7.4",
+      "commit": "07bfa121980524967c0243b7b0f55be7dd5f8d93",
+      "bundleSHA256": "64e93a9a5810b7242d3bd800ccb2c60393daf5497bda208521e6aaef7c377cc1"
+    },
+    "current": {
+      "version": "1.7.4",
+      "parentCommit": "07bfa121980524967c0243b7b0f55be7dd5f8d93",
+      "measuredCommit": "040b887d19d30565a0c72be9bc64209ae5313796",
+      "uncommittedChanges": false,
+      "includesFinalAnimationFix": true,
+      "bundleSHA256": "ce6073cb1f26fbb58974a19b9598e50f207978d4d1e96f3f3ba1789ca160fab6"
+    }
+  },
+  "runs": [
+    {
+      "variant": "npm", "round": 1, "sampleSeconds": 13.0,
+      "cpuPctOneCore": 11.54, "rssMiBMean": 380.4,
+      "refreshModeBefore": "eco", "refreshModeAfter": "eco",
+      "jsonSelfPct": 34.05, "implementationVerified": true,
+      "profileSHA256": "040d83eeba5f934bb2531b9b5a19603113926be3f9d0362b069343c389f74e2c"
+    },
+    {
+      "variant": "upstream-base", "round": 1, "sampleSeconds": 13.01,
+      "cpuPctOneCore": 11.45, "rssMiBMean": 370.9,
+      "refreshModeBefore": "eco", "refreshModeAfter": "eco",
+      "jsonSelfPct": 16.09, "implementationVerified": true,
+      "profileSHA256": "0a521ecf059457807d5c490fec422b3f1845f9a179817504368c019248c530bf"
+    },
+    {
+      "variant": "current", "round": 1, "sampleSeconds": 13.0,
+      "cpuPctOneCore": 10.69, "rssMiBMean": 372.3,
+      "refreshModeBefore": "eco", "refreshModeAfter": "eco",
+      "jsonSelfPct": 10.62, "implementationVerified": true,
+      "profileSHA256": "b8831087d76b1ce7ca06f014ded9ca4a313cb945f7516c52458a1dd1c1de85d9"
+    },
+    {
+      "variant": "npm", "round": 2, "sampleSeconds": 13.01,
+      "cpuPctOneCore": 6.69, "rssMiBMean": 368.1,
+      "refreshModeBefore": "eco", "refreshModeAfter": "eco",
+      "jsonSelfPct": 5.55, "implementationVerified": true,
+      "profileSHA256": "546ee146d15d175a82746f1138d039f421225d22315977439988d05ef6f3bd6c"
+    },
+    {
+      "variant": "current", "round": 2, "sampleSeconds": 13.02,
+      "cpuPctOneCore": 5.91, "rssMiBMean": 363.2,
+      "refreshModeBefore": "eco", "refreshModeAfter": "eco",
+      "jsonSelfPct": 7.23, "implementationVerified": true,
+      "profileSHA256": "326d9798454cd0c9cb52c1487e3707fb143ed5bde9397890911c2f98e6f7a075"
+    },
+    {
+      "variant": "upstream-base", "round": 2, "sampleSeconds": 13.01,
+      "cpuPctOneCore": 6.77, "rssMiBMean": 364.7,
+      "refreshModeBefore": "eco", "refreshModeAfter": "eco",
+      "jsonSelfPct": 4.59, "implementationVerified": true,
+      "profileSHA256": "e9e55b25f00f284a0b05d166be030241de3b8f228225ca94451c090a9aaef621"
+    },
+    {
+      "variant": "current", "round": 3, "sampleSeconds": 13.0,
+      "cpuPctOneCore": 4.46, "rssMiBMean": 353.9,
+      "refreshModeBefore": "eco", "refreshModeAfter": "eco",
+      "jsonSelfPct": 14.06, "implementationVerified": true,
+      "profileSHA256": "4984d31e3647cfbbea67e05e3677ad74f8a4c6f84f3e79f61c062d220d2e7f62"
+    },
+    {
+      "variant": "npm", "round": 3, "sampleSeconds": 13.02,
+      "cpuPctOneCore": 9.3, "rssMiBMean": 374.1,
+      "refreshModeBefore": "eco", "refreshModeAfter": "eco",
+      "jsonSelfPct": 5.59, "implementationVerified": true,
+      "profileSHA256": "4eb244b4c63037b6d60564ce1dccdd0fd43474d32d8619d4150bd64823b12720"
+    },
+    {
+      "variant": "upstream-base", "round": 3, "sampleSeconds": 13.0,
+      "cpuPctOneCore": 6.61, "rssMiBMean": 353.3,
+      "refreshModeBefore": "eco", "refreshModeAfter": "eco",
+      "jsonSelfPct": 10.06, "implementationVerified": true,
+      "profileSHA256": "90acf63c32d0c67676dc34fc75932702a92bd8507c13cf8c64780468f5d15a48"
+    }
+  ],
+  "postRunHistoryAudit": {
+    "backedUpEntries": 281,
+    "presentEntries": 281,
+    "identicalEntries": 281,
+    "missingEntries": 0,
+    "newEntries": 0
+  },
+  "validation": {
+    "pluginTestsPassed": 75,
+    "benchmarkTestsPassed": 6,
+    "typecheckPassed": true,
+    "buildPassed": true,
+    "realTuiAnimationScenariosPassed": 3,
+    "realTuiAnimationPhaseChecksPassed": 12,
+    "realTuiClearFixturePassed": true
+  }
+}

@@ -75,7 +75,7 @@ export interface PanelApi {
       startedAt?: number
     }): string | undefined
     /** Optional host-side listing of spawned child sessions. */
-    listChildren?(parentId: string): ChildSessionLike[] | undefined
+    listChildren?(parentId: string, excludedSessionIds?: ReadonlySet<string>): ChildSessionLike[] | undefined
   }
   event: {
     on(type: PanelEventType, cb: (e: PanelEvent) => void): () => void

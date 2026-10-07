@@ -37,3 +37,6 @@ jobs:
 
       - name: Test
         run: npm test
+
+      - name: Verify benchmark profiles
+        run: python3 tests/benchmark-tui.test.py
