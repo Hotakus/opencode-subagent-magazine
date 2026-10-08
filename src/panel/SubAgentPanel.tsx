@@ -793,6 +793,10 @@ export function SubAgentPanel(props: {
 
   // ── history scan（mount/switch、重试与消息驱动 rescan 共用）──
 
+  /** 连续 idle 观测计数：子会话刚创建时短暂 idle 不应触发落定，
+   *  要求连续 N 次观测到 idle 才认为真正完成。 */
+  const idleStreak = new Map<string, number>()
+
   /** 将子会话已 idle 的 running 条目标记为已落定。
    *  纯 map 变换——是否持久化由调用方决定。 */
   const settleIdleEntries = (prev: Map<string, SubEntry>): Map<string, SubEntry> => {
@@ -816,7 +820,15 @@ export function SubAgentPanel(props: {
       }
       try {
         const st = props.api.session.status(sid)
-        if (!st || st.type !== "idle") continue
+        if (!st || st.type !== "idle") {
+          idleStreak.delete(id)  // 非 idle → 重置计数
+          continue
+        }
+        // 连续 5 次 idle（约 2.5s）才落定，避免子会话刚创建时的短暂 idle 被误判为完成
+        const streak = (idleStreak.get(id) ?? 0) + 1
+        idleStreak.set(id, streak)
+        if (streak < 5) continue
+
         const tokens = props.api.usage.readSessionTokens(sid)
         const cost = props.api.usage.readSessionCost(sid)
         const finalStatus: SubStatus = entry.status === "cancel_requested" && entry.abortAccepted
@@ -827,6 +839,7 @@ export function SubAgentPanel(props: {
           tokens: tokens ?? entry.tokens,
           cost: cost ?? entry.cost,
         })
+        idleStreak.delete(id)  // 落定后清理计数
         changed = true
       } catch {}
     }
