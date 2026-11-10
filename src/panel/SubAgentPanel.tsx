@@ -17,7 +17,7 @@ import { createT } from "../i18n"
 import type { Lang, RefreshMode, SortOrder, ScrollMode, SubEntry, SubStatus, SessionRecord, TimeFormat } from "../core/types"
 import { SUBAGENT_TOOLS, isBackgroundInput } from "../core/types"
 import { visualWidth, truncate, fmtDuration, fmtTokens, safeErrorMsg } from "../core/format"
-import { rgb, desaturateTo, dimColor, FALLBACK, MAX_SAT } from "../core/color"
+import { mixColors, desaturateTo, dimColor, FALLBACK, MAX_SAT } from "../core/color"
 import { KV_PREFIX, updateSessionData } from "../core/kv"
 import type { PanelApi, PanelEvent } from "./panel-api"
 import { globalEntryCache, clearTick } from "./store"
@@ -1669,12 +1669,7 @@ export function SubAgentPanel(props: {
                 if (isCancelled) return pal().muted
                 if (!isActiveRunning) return isError ? pal().error : pal().success
                 const t = (Math.sin(((now() % 2000) / 2000) * Math.PI * 2 - Math.PI / 2) + 1) / 2
-                const a = rgb(pal().muted), b = rgb(pal().warning)
-                if (!a || !b) return pal().warning
-                const r = Math.round(a.r + (b.r - a.r) * t)
-                const g = Math.round(a.g + (b.g - a.g) * t)
-                const bl = Math.round(a.b + (b.b - a.b) * t)
-                return "#" + [r, g, bl].map((v) => Math.max(0, Math.min(255, v)).toString(16).padStart(2, "0")).join("")
+                return mixColors(pal().muted, pal().warning, t) ?? pal().warning
               }
 
               const timeColor = () =>
