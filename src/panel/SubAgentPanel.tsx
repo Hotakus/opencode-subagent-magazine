@@ -1581,7 +1581,7 @@ export function SubAgentPanel(props: {
         }}
       >
         <span style={{ fg: pal().muted }}>{renderTick() >= 0 && open() ? "\u25bc " : "\u25b6 "}</span>
-        <span style={{ fg: pal().primary }}>{t("panel.title")}</span>
+        <span style={{ fg: pal().primary }}><b>{t("panel.title")}</b></span>
         <Show when={showVersion()}><span style={{ fg: dimColor(pal().muted, 0.75) }}>{versionText}</span></Show>
         {anyEntry() ? (
           <>
