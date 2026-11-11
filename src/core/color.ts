@@ -19,6 +19,37 @@ export function rgb(raw: unknown): { r: number; g: number; b: number } | null {
   return null
 }
 
+/** Preserve alpha from both hex colours and the host's RGBA objects. */
+function alpha(raw: unknown): number {
+  if (typeof raw === "string" && raw.startsWith("#") && raw.length === 9) {
+    return parseInt(raw.slice(7), 16)
+  }
+  if (raw && typeof raw === "object") {
+    const a = (raw as { a?: unknown }).a
+    if (typeof a === "number" && Number.isFinite(a)) {
+      return Math.round(Math.max(0, Math.min(1, a)) * 255)
+    }
+  }
+  return 255
+}
+
+function toHex(r: number, g: number, b: number, a = 255): string {
+  const channels = a === 255 ? [r, g, b] : [r, g, b, a]
+  return "#" + channels.map(v => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0")).join("")
+}
+
+/** RGB interpolation with alpha retained (for animated status colours). */
+export function mixColors(first: unknown, second: unknown, t: number): string | null {
+  const a = rgb(first), b = rgb(second)
+  if (!a || !b) return null
+  return toHex(
+    a.r + (b.r - a.r) * t,
+    a.g + (b.g - a.g) * t,
+    a.b + (b.b - a.b) * t,
+    alpha(first) + (alpha(second) - alpha(first)) * t,
+  )
+}
+
 export function saturation(r: number, g: number, b: number): number {
   const max = Math.max(r, g, b) / 255
   const min = Math.min(r, g, b) / 255
@@ -33,7 +64,7 @@ function desaturateTo(raw: unknown, maxSat: number, fallback: string): string {
   if (!c) return fallback
   const sat = saturation(c.r, c.g, c.b)
   if (sat <= maxSat) {
-    return "#" + [c.r, c.g, c.b].map((v) => v.toString(16).padStart(2, "0")).join("")
+    return toHex(c.r, c.g, c.b, alpha(raw))
   }
   const luma = c.r * 0.299 + c.g * 0.587 + c.b * 0.114
   let lo = 0, hi = 1
@@ -48,7 +79,7 @@ function desaturateTo(raw: unknown, maxSat: number, fallback: string): string {
   const nr = Math.round(c.r + (luma - c.r) * hi)
   const ng = Math.round(c.g + (luma - c.g) * hi)
   const nb = Math.round(c.b + (luma - c.b) * hi)
-  return "#" + [nr, ng, nb].map((v) => Math.max(0, Math.min(255, v)).toString(16).padStart(2, "0")).join("")
+  return toHex(nr, ng, nb, alpha(raw))
 }
 
 function dimColor(hex: string, factor = 0.5): string {
@@ -57,7 +88,7 @@ function dimColor(hex: string, factor = 0.5): string {
   const r = Math.round(c.r * factor)
   const g = Math.round(c.g * factor)
   const b = Math.round(c.b * factor)
-  return "#" + [r, g, b].map((v) => Math.max(0, Math.min(255, v)).toString(16).padStart(2, "0")).join("")
+  return toHex(r, g, b, alpha(hex))
 }
 
 export const FALLBACK = {

@@ -1,3 +1,5 @@
+import type { ColorInput } from "@opentui/core"
+
 /**
  * V2 (opencode2) TUI plugin API — 最小本地类型（实验版）。
  * 运行时由 opencode2 提供，此处仅用于本地类型检查；
@@ -11,16 +13,18 @@ export interface App {
 
 export interface Theme {
   readonly hue: {
-    readonly interactive: { readonly 300: string }
-    readonly accent: { readonly 500: string }
+    readonly interactive: { readonly 300: ColorInput }
+    readonly accent: { readonly 500: ColorInput }
   }
   readonly text: {
-    readonly default: string
-    readonly subdued: string
+    readonly base?: ColorInput
+    readonly default?: ColorInput
+    readonly muted?: ColorInput
+    readonly subdued?: ColorInput
     readonly feedback: {
-      readonly success: { readonly default: string }
-      readonly error: { readonly default: string }
-      readonly warning: { readonly default: string }
+      readonly success: { readonly base?: ColorInput; readonly default?: ColorInput }
+      readonly error: { readonly base?: ColorInput; readonly default?: ColorInput }
+      readonly warning: { readonly base?: ColorInput; readonly default?: ColorInput }
     }
   }
 }
