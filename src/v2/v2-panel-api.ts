@@ -1,7 +1,8 @@
 import type { Context } from "./types"
 import type { PanelApi, PanelEvent, PanelEventType } from "../panel/panel-api"
 import { SETTING_KEYS } from "../core/kv"
-import { createSessionDbIndex, modelIdOf, statusOfChild } from "./db"
+import { createSessionDbIndex, modelIdOf, statusOfChild, toWindowMessage } from "./db"
+import { callWindowUsage, type WindowMessage } from "../core/usage"
 
 const SUBAGENT_TOOL_V2 = "subagent"
 
@@ -32,7 +33,7 @@ function toV1Part(p: Record<string, any>): Record<string, any> {
       ...(((st as Record<string, unknown>).metadata ?? {}) as Record<string, unknown>),
       ...((p.metadata ?? {}) as Record<string, unknown>),
     })
-    return { type: "tool", id: p.id, tool: p.tool ?? p.name, state: st, subagent_type: p.subagent_type, metadata: meta }
+    return { type: "tool", id: p.id, tool: p.tool ?? p.name, state: st, subagent_type: p.subagent_type, metadata: meta, time: p.time }
   }
   if (p.type === "text") return { type: "text", text: String(p.text ?? "") }
   if (p.type === "file") return { type: "file", source: p.source ?? {} }
@@ -396,6 +397,31 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
         } catch { return undefined }
       },
       readSessionTodo: () => undefined, // V2 无 todo 数据源
+      readCallUsage: (sid: string, startedAt: number) => {
+        if (!sid) return undefined
+        // 本地库是完整历史；不可用时回退宿主已缓存的消息。
+        let msgs: WindowMessage[] | undefined
+        try { msgs = dbIndex?.windowMessages(sid) } catch {}
+        if (!msgs) {
+          try {
+            const raw = context.data.session.message.list(sid)
+            if (raw) {
+              msgs = []
+              for (const m of raw as Array<Record<string, any>>) {
+                const w = toWindowMessage({
+                  type: m.type, at: m.time?.created, cost: m.cost, tokens: m.tokens, model: m.model, outcome: m.outcome,
+                })
+                if (w) msgs.push(w)
+              }
+            }
+          } catch {}
+        }
+        if (!msgs) {
+          requestMessageSync(sid)
+          return undefined
+        }
+        return callWindowUsage(msgs, startedAt)
+      },
     },
     session: {
       get: (sid) => {

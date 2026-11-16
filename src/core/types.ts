@@ -24,6 +24,9 @@ export interface SubEntry {
   origin?: "tool" | "sub"
   /** 工具输入带 background/run_in_background（后台衍生会话）。 */
   background?: boolean
+  /** 按调用分行（/subagent-split）：续接同一子会话的调用不合并，
+   *  耗时与用量只统计本次调用的那一轮。 */
+  perCall?: boolean
 }
 
 export type Lang = LangCode
@@ -85,5 +88,7 @@ export interface SharedSignals {
   setShowOrigin: (v: boolean) => void
   dbSync: () => boolean
   setDbSync: (v: boolean) => void
+  splitCalls: () => boolean
+  setSplitCalls: (v: boolean) => void
   sessionId: string
 }

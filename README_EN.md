@@ -62,8 +62,9 @@ Interested in token cache visualization? Check out [opencode-visual-cache](https
 - **Missed-event Recovery**: periodic reconcile + history scan + discovery poll recover sub-agents whose events were dropped
 - **Entry Display Toggles**: `/subagent-cost` shows per-entry cost in the list (4 decimals, off by default; always shown when expanded); `/subagent-time` and `/subagent-tokens` toggle elapsed time and tokens (on by default)
 - **Configurable Time Format**: `/subagent-time-format` supports short (default), decimal, clock, compact, seconds
+- **One Row per Continued Call**: `/subagent-split` shows each call that continues a sub-agent session (subagent tool with `sessionID`) in its own row; elapsed time, tokens and cost cover only that call's round (off by default, which keeps one merged row per child session)
 - **Settings Menu**: `/subagent-sections` opens the native looping settings menu (V2); `/subagent-config` shows a settings summary
-- **Slash Commands**: `/subagent-lang`, `/subagent-max`, `/subagent-order`, `/subagent-scroll`, `/subagent-ttl`, `/subagent-clear-entries`, `/subagent-session`, `/subagent-version`, `/subagent-clear-running`, `/subagent-border`, `/subagent-refresh`, `/subagent-config`, `/subagent-sections`, `/subagent-cost`, `/subagent-time`, `/subagent-tokens`, `/subagent-time-format` for dynamic configuration
+- **Slash Commands**: `/subagent-lang`, `/subagent-max`, `/subagent-order`, `/subagent-scroll`, `/subagent-ttl`, `/subagent-clear-entries`, `/subagent-session`, `/subagent-version`, `/subagent-clear-running`, `/subagent-border`, `/subagent-refresh`, `/subagent-config`, `/subagent-sections`, `/subagent-cost`, `/subagent-time`, `/subagent-tokens`, `/subagent-time-format`, `/subagent-split` for dynamic configuration
 
 ---
 
@@ -129,6 +130,7 @@ The plugin supports dynamic configuration via slash commands or the command pale
 | `/subagent-time` | Toggle entry time | Elapsed time in the list (on by default) |
 | `/subagent-tokens` | Toggle entry tokens | Token count in the list (on by default) |
 | `/subagent-time-format` | Set time format | short (default, 45.32s / 112m35s) / decimal / clock / compact / seconds |
+| `/subagent-split` | Toggle one row per continued call | Each call that continues a child session gets its own row, timed and costed for that round only (off by default) |
 
 <div align="center">
   <img src="https://raw.githubusercontent.com/Hotakus/opencode-subagent-magazine/master/assets/slash_cmds.png" alt="Slash Commands" width="49%"></img>

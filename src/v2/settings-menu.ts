@@ -53,6 +53,7 @@ async function runSettingsMenu(context: Context, api: PanelApi, signals: SharedS
         { title: t("settings.showEntryTokens"), value: "tokens", description: onOff(signals.showEntryTokens()), category },
         { title: t("settings.showOrigin"), value: "origin", description: onOff(signals.showOrigin()), category },
         { title: t("settings.dbSync"), value: "dbsync", description: onOff(signals.dbSync()), category },
+        { title: t("settings.splitCalls"), value: "split", description: onOff(signals.splitCalls()), category },
         { title: t("settings.close"), value: "close" },
       ],
     })
@@ -269,6 +270,23 @@ async function runSettingsMenu(context: Context, api: PanelApi, signals: SharedS
         signals.setDbSync(picked)
         kv.set(SETTING_KEYS.dbSync, picked)
         toast(t("settings.dbSync"), onOff(picked))
+      }
+    }
+
+    // ── 按调用分行 ──
+    if (choice === "split") {
+      const picked = await context.ui.dialog.select<boolean>({
+        title: t("settings.splitCalls"),
+        options: [
+          { title: t("settings.on"), value: true },
+          { title: t("settings.off"), value: false },
+        ],
+        current: signals.splitCalls(),
+      })
+      if (picked !== undefined) {
+        signals.setSplitCalls(picked)
+        kv.set(SETTING_KEYS.splitCalls, picked)
+        toast(t("settings.splitCalls"), onOff(picked))
       }
     }
 

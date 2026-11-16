@@ -47,6 +47,7 @@ function PluginRoot(props: {
       showEntryTokens={props.signals.showEntryTokens}
       timeFormat={props.signals.timeFormat}
       showOrigin={props.signals.showOrigin}
+      splitCalls={props.signals.splitCalls}
       sessionId={props.sessionID}
     />
   )
@@ -104,6 +105,9 @@ const mod: PluginModule & { server: () => Promise<Record<string, never>> } = {
     const [dbSyncSignal, setDbSync] = createSignal<boolean>(
       (api.kv.get(SETTING_KEYS.dbSync, true) as boolean) !== false,
     )
+    const [splitCallsSignal, setSplitCalls] = createSignal<boolean>(
+      (api.kv.get(SETTING_KEYS.splitCalls, false) as boolean) === true,
+    )
     lang = langSignal
     maxEntries = maxSignal
     sortOrder = orderSignal
@@ -117,6 +121,7 @@ const mod: PluginModule & { server: () => Promise<Record<string, never>> } = {
       timeFormat: timeFormatSignal, setTimeFormat,
       showOrigin: showOriginSignal, setShowOrigin,
       dbSync: dbSyncSignal, setDbSync,
+      splitCalls: splitCallsSignal, setSplitCalls,
       sessionId: "",
     }
 

@@ -43,6 +43,7 @@ function createSidebarSlot(api: TuiPluginApi, panelApi: PanelApi, sig: SharedSig
             showEntryTokens={sig.showEntryTokens}
             timeFormat={sig.timeFormat}
             showOrigin={sig.showOrigin}
+            splitCalls={sig.splitCalls}
             sessionId={input.session_id}
           />
         )
@@ -91,8 +92,11 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
   const [dbSync, setDbSync] = createSignal<boolean>(
     (api.kv.get(`${KV_PREFIX}.db_sync`, true) as boolean) !== false
   )
+  const [splitCalls, setSplitCalls] = createSignal<boolean>(
+    (api.kv.get(`${KV_PREFIX}.split_calls`, false) as boolean) === true
+  )
 
-  const signals: SharedSignals = { lang, setLang, maxEntries, setMaxEntries, sortOrder, setSortOrder, scrollMode, setScrollMode, refreshMode, setRefreshMode, borderVisible, setBorderVisible, showEntryCost, setShowEntryCost, showEntryTime, setShowEntryTime, showEntryTokens, setShowEntryTokens, timeFormat, setTimeFormat, showOrigin, setShowOrigin, dbSync, setDbSync, sessionId: "" }
+  const signals: SharedSignals = { lang, setLang, maxEntries, setMaxEntries, sortOrder, setSortOrder, scrollMode, setScrollMode, refreshMode, setRefreshMode, borderVisible, setBorderVisible, showEntryCost, setShowEntryCost, showEntryTime, setShowEntryTime, showEntryTokens, setShowEntryTokens, timeFormat, setTimeFormat, showOrigin, setShowOrigin, dbSync, setDbSync, splitCalls, setSplitCalls, sessionId: "" }
 
   // ── V1 PanelApi adapter: wraps the V1 host API into the shared panel contract ──
   const v1Api: PanelApi = {
@@ -620,6 +624,22 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
         signals.setShowOrigin(!cur)
         api.ui.toast({
           message: `${t("settings.showOrigin")}: ${!cur ? t("settings.on") : t("settings.off")}`,
+        })
+        dialog?.clear()
+      },
+    },
+    {
+      title: "SubAgent Magazine: One Row per Call",
+      value: "subagent-split",
+      description: "Show each call that continues a sub-agent session in its own row",
+      slash: { name: "subagent-split" },
+      onSelect: (dialog) => {
+        const t = createT(() => signals.lang())
+        const cur = Boolean(api.kv.get(`${KV_PREFIX}.split_calls`, false))
+        api.kv.set(`${KV_PREFIX}.split_calls`, !cur)
+        signals.setSplitCalls(!cur)
+        api.ui.toast({
+          message: `${t("settings.splitCalls")}: ${!cur ? t("settings.on") : t("settings.off")}`,
         })
         dialog?.clear()
       },

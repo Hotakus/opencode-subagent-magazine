@@ -32,6 +32,7 @@ export const SETTING_KEYS = {
   timeFormat: `${KV_PREFIX}.time_format`,
   showOrigin: `${KV_PREFIX}.show_origin`,
   dbSync: `${KV_PREFIX}.db_sync`,
+  splitCalls: `${KV_PREFIX}.split_calls`,
 } as const
 
 export function loadSessionData(kv: KVApi): Record<string, SessionRecord> {

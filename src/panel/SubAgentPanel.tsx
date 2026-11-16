@@ -15,6 +15,7 @@ import { PLUGIN_VERSION } from "../_version"
 import { copyText } from "../clipboard"
 import { createT } from "../i18n"
 import type { Lang, RefreshMode, SortOrder, ScrollMode, SubEntry, SubStatus, SessionRecord, TimeFormat } from "../core/types"
+import type { CallUsage } from "../core/usage"
 import { SUBAGENT_TOOLS, isBackgroundInput } from "../core/types"
 import { visualWidth, truncate, fmtDuration, fmtTokens, safeErrorMsg } from "../core/format"
 import { rgb, desaturateTo, dimColor, FALLBACK, MAX_SAT } from "../core/color"
@@ -51,6 +52,31 @@ function validModel(model: string | undefined): model is string {
   return s.length > 0 && s !== "[object Object]" && !s.startsWith("{")
 }
 
+/** 工具调用的开始时间：V2 part.time.ran/created，V1 state.time.start。 */
+function partStartedAt(part: Record<string, any>, st: Record<string, unknown> | undefined): number | undefined {
+  const time = part?.time as Record<string, unknown> | undefined
+  const stTime = st?.time as Record<string, unknown> | undefined
+  for (const v of [time?.ran, time?.created, stTime?.start]) {
+    const n = Number(v)
+    if (Number.isFinite(n) && n > 0) return n
+  }
+  return undefined
+}
+
+/** 续接调用的子会话 id（subagent 工具输入带 sessionID）。 */
+function inputSessionId(input: Record<string, unknown> | undefined): string | undefined {
+  const v = input?.sessionID ?? input?.session_id
+  return typeof v === "string" && v.length > 0 ? v : undefined
+}
+
+/** 一轮调用结束时的状态（idle outcome → 条目状态）。 */
+function callEndStatus(entry: SubEntry | undefined, outcome: string | undefined): SubStatus {
+  if (outcome === "failed") return "error"
+  if (outcome === "interrupted") return "cancelled"
+  if (entry?.status === "cancel_requested" && entry.abortAccepted) return "cancelled"
+  return "done"
+}
+
 export function SubAgentPanel(props: {
   api: PanelApi
   theme: Record<string, unknown>
@@ -65,6 +91,8 @@ export function SubAgentPanel(props: {
   showEntryTokens: () => boolean
   timeFormat: () => TimeFormat
   showOrigin: () => boolean
+  /** 按调用分行：续接同一子会话的调用各占一行（默认关）。 */
+  splitCalls?: () => boolean
   sessionId: string
 }): JSX.Element {
   const t = createT(() => props.lang())
@@ -364,6 +392,27 @@ export function SubAgentPanel(props: {
     setEntryMap((prev) => upsertSubEntry(prev, partial))
   }
 
+  // ── 按调用分行（/subagent-split）──
+  const splitCalls = () => props.splitCalls?.() === true
+  const isPerCall = (entry: SubEntry | undefined) => entry?.perCall === true && entry.origin !== "sub"
+
+  /** 本次调用那一轮的用量。null：非按调用条目或宿主不支持，改读子会话合计。 */
+  const callUsageOf = (entry: SubEntry | undefined, sid: string): CallUsage | undefined | null => {
+    if (!isPerCall(entry) || !props.api.usage.readCallUsage) return null
+    try { return props.api.usage.readCallUsage(sid, entry!.startedAt) } catch { return undefined }
+  }
+
+  /** 条目用量：按调用条目只取本轮，其余取子会话合计（同 readSession*）。 */
+  const usageOf = (entry: SubEntry | undefined, sid: string): { tokens?: number; cost?: number; model?: string } => {
+    const call = callUsageOf(entry, sid)
+    if (call !== null) return { tokens: call?.tokens, cost: call?.cost, model: call?.model }
+    return {
+      tokens: props.api.usage.readSessionTokens(sid),
+      cost: props.api.usage.readSessionCost(sid),
+      model: props.api.usage.readSessionModel(sid),
+    }
+  }
+
   // ── cancel helpers ──
   const isDescendantOf = (childId: string, rootId: string): boolean => {
     const visited = new Set<string>()
@@ -410,8 +459,7 @@ export function SubAgentPanel(props: {
     try {
       const st = props.api.session.status(childId)
       if (st?.type !== "busy") {
-        const tokens = props.api.usage.readSessionTokens(childId)
-        const cost = props.api.usage.readSessionCost(childId)
+        const { tokens, cost } = usageOf(entry, childId)
         upsertEntry({
           id: entry.id, title: entry.title, agent: entry.agent, prompt: entry.prompt,
           status: "done", sessionId: entry.sessionId,
@@ -534,10 +582,30 @@ export function SubAgentPanel(props: {
       // Child session ID lives in state-level metadata (ToolStateCompleted.metadata),
       // injected by the tool executor.  ToolPart.sessionID is the parent session.
       const stMeta = partMetadata(part as Record<string, any>, st)
+      const perCall = splitCalls()
       const subSid = stMeta?.session_id !== undefined ? String(stMeta.session_id)
         : stMeta?.sessionId !== undefined ? String(stMeta.sessionId)
+        : perCall ? inputSessionId(input)
         : undefined
-      upsertEntry({ id, title, agent, prompt, sessionId: subSid, status, origin: "tool", background: isBackgroundInput(input) })
+      if (!perCall) {
+        upsertEntry({ id, title, agent, prompt, sessionId: subSid, status, origin: "tool", background: isBackgroundInput(input) })
+        return
+      }
+      // 按调用分行：工具完成 ≠ 本轮结束（续接调用立即返回，子会话在后台继续）。
+      // 本轮尚未 idle 时保持 running，避免先落定再被轮询拉回。
+      const existing = entryMap().get(id)
+      const startedAt = existing?.startedAt ?? partStartedAt(part as Record<string, any>, st) ?? Date.now()
+      if (status === "done" && subSid) {
+        let call: CallUsage | undefined
+        try { call = props.api.usage.readCallUsage?.(subSid, startedAt) } catch {}
+        let busy = false
+        try { busy = props.api.session.status(subSid)?.type === "busy" } catch {}
+        if (call ? call.endedAt === undefined : busy) status = "running"
+      }
+      upsertEntry({
+        id, title, agent, prompt, sessionId: subSid, status, origin: "tool", background: isBackgroundInput(input),
+        startedAt, perCall: true,
+      })
     }
   }
 
@@ -592,11 +660,12 @@ export function SubAgentPanel(props: {
       for (const [, entry] of entriesMap) {
         if (entry.sessionId === targetSid && (entry.status === "running" || entry.status === "cancel_requested")) {
           const finalStatus = targetStatus === "error" ? "error" : settleOnIdle(entry)
+          const usage = isPerCall(entry) ? usageOf(entry, targetSid) : undefined
           entry.status = finalStatus
           entry.endedAt = nowTs
-          entry.tokens = entry.tokens ?? sessionTokens
-          entry.cost = entry.cost ?? sessionCost
-          entry.model = entry.model ?? sessionModel
+          entry.tokens = usage ? usage.tokens ?? entry.tokens : entry.tokens ?? sessionTokens
+          entry.cost = usage ? usage.cost ?? entry.cost : entry.cost ?? sessionCost
+          entry.model = usage ? usage.model ?? entry.model : entry.model ?? sessionModel
           entry.todoTotal = entry.todoTotal ?? sessionTodo?.total
           entry.todoDone = entry.todoDone ?? sessionTodo?.done
           entry.error = errorMsg || entry.error
@@ -652,12 +721,14 @@ export function SubAgentPanel(props: {
         // For "done" entries (sync tasks completed before session.idle), only backfill tokens/cost
         const alreadySettled = entry.status !== "running" && entry.status !== "cancel_requested"
         const finalStatus = status === "error" ? "error" : settleOnIdle(entry)
+        // 按调用条目：用量只取本轮（续接同一子会话的旧调用不被会话合计覆盖）。
+        const usage = isPerCall(entry) ? usageOf(entry, sid) : undefined
         next.set(id, {
           ...entry,
           ...(alreadySettled ? {} : { status: finalStatus, endedAt: Date.now() }),
-          tokens: entry.tokens ?? sessionTokens,
-          cost: entry.cost ?? sessionCost,
-          model: entry.model ?? sessionModel,
+          tokens: usage ? usage.tokens ?? entry.tokens : entry.tokens ?? sessionTokens,
+          cost: usage ? usage.cost ?? entry.cost : entry.cost ?? sessionCost,
+          model: usage ? usage.model ?? entry.model : entry.model ?? sessionModel,
           todoTotal: entry.todoTotal ?? sessionTodo?.total,
           todoDone: entry.todoDone ?? sessionTodo?.done,
           error: errorMsg || entry.error,
@@ -771,9 +842,10 @@ export function SubAgentPanel(props: {
         const next = new Map(prev)
         for (const [id, entry] of next) {
           if (entry.sessionId !== sid) continue
-          const t = finalTokens ?? entry.tokens
-          const c = finalCost ?? entry.cost
-          const m = finalModel ?? entry.model
+          const usage = isPerCall(entry) ? usageOf(entry, sid) : undefined
+          const t = (usage ? usage.tokens : finalTokens) ?? entry.tokens
+          const c = (usage ? usage.cost : finalCost) ?? entry.cost
+          const m = (usage ? usage.model : finalModel) ?? entry.model
           const tt = finalTodo?.total ?? entry.todoTotal
           const td = finalTodo?.done ?? entry.todoDone
           if (t !== entry.tokens || c !== entry.cost || m !== entry.model ||
@@ -814,6 +886,19 @@ export function SubAgentPanel(props: {
         next.set(id, { ...entry, sessionId: sid })
         changed = true
       }
+      // 按调用条目：以本轮的 idle 为准（子会话可能已在跑下一轮）。
+      const call = callUsageOf(entry, sid)
+      if (call) {
+        if (call.endedAt === undefined) continue
+        next.set(id, {
+          ...entry, sessionId: sid, status: callEndStatus(entry, call.outcome), endedAt: call.endedAt,
+          tokens: call.tokens ?? entry.tokens,
+          cost: call.cost ?? entry.cost,
+          model: call.model ?? entry.model,
+        })
+        changed = true
+        continue
+      }
       try {
         const st = props.api.session.status(sid)
         if (!st || st.type !== "idle") continue
@@ -843,6 +928,89 @@ export function SubAgentPanel(props: {
     } catch {}
   }
 
+  /** 工具 part 的 agent / prompt / 标题（与默认 scan 同一口径）。 */
+  const scanTitle = (part: Record<string, any>, input: Record<string, unknown> | undefined, tool: string) => {
+    const agent = String(part.subagent_type ?? input?.agent ?? input?.subagent_type ?? tool)
+    const prompt = String(input?.prompt ?? part.description ?? "")
+    const desc = input?.description !== undefined ? String(input.description) : ""
+    const title = desc || truncate(prompt.replace(/\n/g, " ").trim(), 40)
+    return { agent, prompt, title }
+  }
+
+  /** 按调用分行的 scan：每个工具调用一个条目，状态、耗时与用量取自
+   *  子会话里本次调用的那一轮（续接调用不再共用首次调用的起点）。 */
+  const scanPerCallPart = (
+    next: Map<string, SubEntry>,
+    input: {
+      id: string
+      existingKey: string | undefined
+      exists: SubEntry | undefined
+      part: Record<string, any>
+      st: Record<string, unknown> | undefined
+      rawStatus: string
+      input: Record<string, unknown> | undefined
+      sid: string | undefined
+      title: { agent: string; prompt: string; title: string }
+    },
+  ) => {
+    const { id, existingKey, part, st, rawStatus, sid } = input
+    // 默认模式留下的条目（一个条目合并了整段会话）按本次调用重建。
+    const prior = input.exists?.perCall === true ? input.exists : undefined
+    const complete = prior !== undefined &&
+      prior.status !== "running" && prior.status !== "cancel_requested" &&
+      prior.sessionId !== undefined && prior.tokens !== undefined && prior.cost !== undefined && validModel(prior.model)
+    if (complete) return
+
+    const startedAt = prior?.startedAt ?? partStartedAt(part, st) ?? Date.now()
+    let call: CallUsage | undefined
+    if (sid) {
+      try { call = props.api.usage.readCallUsage?.(sid, startedAt) } catch {}
+    }
+
+    let status: SubStatus
+    let endedAt: number | undefined
+    if (call?.endedAt !== undefined) {
+      status = callEndStatus(prior, call.outcome)
+      endedAt = call.endedAt
+    } else if (call) {
+      status = prior?.status === "cancel_requested" ? "cancel_requested" : "running"
+    } else if (prior) {
+      status = prior.status
+      endedAt = prior.endedAt
+    } else {
+      // 本轮尚不可读（本地库关闭、消息未同步或宿主不支持）：按工具状态与
+      // 子会话实时状态判断，再交给轮询补全。
+      status = rawStatus === "completed" ? "done" : "running"
+      if (status === "done" && sid) {
+        try { if (props.api.session.status(sid)?.type === "busy") status = "running" } catch {}
+      }
+      const time = part.time as Record<string, unknown> | undefined
+      const stTime = st?.time as Record<string, unknown> | undefined
+      endedAt = status === "done" ? Number(time?.completed ?? stTime?.end) || startedAt : undefined
+    }
+
+    const entry: SubEntry = {
+      ...(prior ?? {}),
+      id,
+      title: input.title.title || prior?.title || "",
+      agent: prior?.agent ?? input.title.agent,
+      prompt: input.title.prompt || prior?.prompt || "",
+      sessionId: sid ?? prior?.sessionId,
+      status,
+      startedAt,
+      endedAt,
+      origin: "tool",
+      background: isBackgroundInput(input.input) || prior?.background === true,
+      perCall: true,
+    }
+    const usage = call ?? (entry.sessionId && !props.api.usage.readCallUsage ? usageOf(entry, entry.sessionId) : undefined)
+    entry.tokens = usage?.tokens ?? prior?.tokens
+    entry.cost = usage?.cost ?? prior?.cost
+    entry.model = validModel(usage?.model) ? usage!.model : prior?.model
+    if (existingKey !== undefined && existingKey !== id) next.delete(existingKey)
+    next.set(id, entry)
+  }
+
   /** 扫描会话历史并 merge 进 entry map。
    *  消息数据尚不可用时返回 false，供调用方重试。 */
   const runSessionScan = (sid: string, replace: boolean): boolean => {
@@ -853,6 +1021,7 @@ export function SubAgentPanel(props: {
     // 扫描结束后可安全从名单移除（见 prunableClearedIds）。
     const seenErrorIds = new Set<string>()
     let scanClearedIds = new Set<string>()
+    const perCall = splitCalls()
     // scan 结果先写入内存（setEntryMapRaw）；scan 末尾统一走 persistEntries 的 merge-safe 落盘。
     setEntryMapRaw((prev) => {
       // 从 KV 加载当前会话的清除名单：既用于跳过被手动清除的历史条目，
@@ -890,6 +1059,7 @@ export function SubAgentPanel(props: {
               let scanSubSid = scanMeta?.session_id !== undefined ? String(scanMeta.session_id)
                 : scanMeta?.sessionId !== undefined ? String(scanMeta.sessionId)
                 : scanMeta?.sessionID !== undefined ? String(scanMeta.sessionID)
+                : perCall ? inputSessionId(scanInput)
                 : undefined
               // 宿主缓存/历史缺少子会话链接时，用本地库按工具 call id 回填。
               if (!scanSubSid) {
@@ -897,7 +1067,7 @@ export function SubAgentPanel(props: {
                   scanSubSid = props.api.session.resolveChild?.({ parentId: sid, callId: String(part.id) })
                 } catch {}
               }
-              const existingKey = findSubEntryKey(next, id, scanSubSid)
+              const existingKey = findSubEntryKey(next, id, scanSubSid, perCall)
               const exists = existingKey ? next.get(existingKey) : undefined
 
               // 已手动清除的条目：scan 发现但不在内存 → 跳过重建。
@@ -916,6 +1086,14 @@ export function SubAgentPanel(props: {
                 if (exists && exists.status === "running") {
                   next.set(existingKey ?? id, { ...exists, status: "error", endedAt: Date.now() })
                 }
+                continue
+              }
+
+              if (perCall) {
+                scanPerCallPart(next, {
+                  id, existingKey, exists, part, st, rawStatus, input: scanInput, sid: scanSubSid,
+                  title: scanTitle(part, scanInput, tool),
+                })
                 continue
               }
 
@@ -1071,9 +1249,12 @@ export function SubAgentPanel(props: {
           const subSid = meta?.session_id !== undefined ? String(meta.session_id)
             : meta?.sessionId !== undefined ? String(meta.sessionId)
             : undefined
-          const key = findSubEntryKey(map, id, subSid)
+          const perCall = splitCalls()
+          const key = findSubEntryKey(map, id, subSid, perCall)
           const entry = key ? map.get(key) : undefined
           if (!entry) return true
+          // 按调用条目：工具早已完成而本轮仍在跑是常态，由轮询按本轮 idle 落定。
+          if (perCall && isPerCall(entry)) continue
           // 非后台 tool 已完成、条目却仍停在 running：补一次 scan 收尾
           // （success 事件可能因缺少 metadata 被适配层丢弃）。
           const input = st?.input as Record<string, unknown> | undefined
@@ -1164,6 +1345,8 @@ export function SubAgentPanel(props: {
             // 回到 running，等下一次真实 idle 再落定。
             for (const [id, entry] of next) {
               if (entry.status !== "done" && entry.status !== "error") continue
+              // 按调用条目不按会话整体恢复：子会话忙于下一轮时，旧调用保持落定。
+              if (isPerCall(entry)) continue
               const sid = entry.sessionId
               if (!sid) continue
               try {
@@ -1217,6 +1400,29 @@ export function SubAgentPanel(props: {
               const running = entry.status === "running" || entry.status === "cancel_requested"
               let entryChanged = false
               const nextEntry: SubEntry = { ...entry }
+              // 按调用条目：状态、耗时与用量都以本轮为准（工具提前完成时拉回 running）。
+              const call = callUsageOf(entry, childSid)
+              if (call !== null) {
+                if (!call) continue
+                if (call.endedAt !== undefined) {
+                  if (running || entry.endedAt !== call.endedAt) {
+                    nextEntry.status = running || entry.status === "done" ? callEndStatus(entry, call.outcome) : entry.status
+                    nextEntry.endedAt = call.endedAt
+                  }
+                } else if (entry.status === "done") {
+                  nextEntry.status = "running"
+                  nextEntry.endedAt = undefined
+                }
+                if (call.tokens !== undefined) nextEntry.tokens = call.tokens
+                if (call.cost !== undefined) nextEntry.cost = call.cost
+                else if (call.endedAt !== undefined) nextEntry.cost = entry.cost ?? 0
+                if (validModel(call.model)) nextEntry.model = call.model
+                if (
+                  nextEntry.status !== entry.status || nextEntry.endedAt !== entry.endedAt ||
+                  nextEntry.tokens !== entry.tokens || nextEntry.cost !== entry.cost || nextEntry.model !== entry.model
+                ) { next.set(id, nextEntry); changed = true }
+                continue
+              }
               if (running || entry.tokens === undefined) {
                 const total = props.api.usage.readSessionTokens(childSid)
                 if (total !== undefined && total !== entry.tokens) { nextEntry.tokens = total; entryChanged = true }

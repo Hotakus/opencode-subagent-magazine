@@ -5,14 +5,31 @@ export type SubEntryPatch = Omit<SubEntry, "startedAt" | "endedAt"> & {
   endedAt?: number
 }
 
+/**
+ * 查找条目键：默认按子会话合并（续接同一子会话的调用共用一个条目）。
+ *
+ * `perCall`（按调用分行）时每个工具调用独占一个条目：先按 id 精确匹配，
+ * 子会话只用于吸收尚未归属任何调用的衍生会话条目（sub:）。
+ * 默认模式也不会把调用并入按调用分行的条目，切换模式后两种条目互不干扰。
+ */
 export function findSubEntryKey(
   entries: ReadonlyMap<string, SubEntry>,
   id: string,
   sessionId?: string,
+  perCall = false,
 ) {
+  if (perCall) {
+    if (entries.has(id)) return id
+    if (sessionId) {
+      for (const [key, entry] of entries) {
+        if (entry.sessionId === sessionId && entry.perCall !== true && !entry.id.startsWith("tool:")) return key
+      }
+    }
+    return undefined
+  }
   if (sessionId) {
     for (const [key, entry] of entries) {
-      if (entry.sessionId === sessionId) return key
+      if (entry.sessionId === sessionId && (entry.perCall !== true || key === id)) return key
     }
   }
   return entries.has(id) ? id : undefined
@@ -23,9 +40,12 @@ export function upsertSubEntry(
   partial: SubEntryPatch,
   now = Date.now(),
 ) {
-  const key = findSubEntryKey(entries, partial.id, partial.sessionId) ?? partial.id
-  const existing = entries.get(key)
+  const matched = findSubEntryKey(entries, partial.id, partial.sessionId, partial.perCall === true)
   const next = new Map(entries)
+  // 按调用条目取代同会话的衍生会话条目（sub:）：后者是整段会话的汇总，不并入本次调用。
+  if (partial.perCall === true && matched !== undefined && matched !== partial.id) next.delete(matched)
+  const key = partial.perCall === true ? partial.id : matched ?? partial.id
+  const existing = key === matched ? entries.get(key) : undefined
   if (key !== partial.id) next.delete(partial.id)
 
   const ended = partial.status === "done" || partial.status === "error" || partial.status === "cancelled"
@@ -89,6 +109,7 @@ export function mergeSubEntry(base: SubEntry, incoming: SubEntry): SubEntry {
     cancelRequestedAt: minDefined(base.cancelRequestedAt, incoming.cancelRequestedAt),
     abortAccepted: base.abortAccepted || incoming.abortAccepted || undefined,
     cancelReason: incoming.cancelReason ?? base.cancelReason,
+    ...(base.perCall || incoming.perCall ? { perCall: true } : {}),
   }
 }
 
@@ -105,8 +126,13 @@ export function mergeSubEntries(
   const out = new Map<string, SubEntry>()
   for (const entry of base) out.set(entry.id, entry)
   for (const entry of incoming) {
-    const key = findSubEntryKey(out, entry.id, entry.sessionId)
+    const key = findSubEntryKey(out, entry.id, entry.sessionId, entry.perCall === true)
     if (!key) {
+      out.set(entry.id, entry)
+      continue
+    }
+    if (key !== entry.id && entry.perCall === true) {
+      out.delete(key)
       out.set(entry.id, entry)
       continue
     }
