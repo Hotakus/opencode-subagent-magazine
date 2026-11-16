@@ -150,6 +150,7 @@ export function makeCommands(
           `${t("settings.showOrigin")}: ${onOff(signals.showOrigin())}`,
           `${t("settings.timeFormat")}: ${TIME_FORMAT_SAMPLES[signals.timeFormat()]}`,
           `${t("settings.dbSync")}: ${onOff(signals.dbSync())}`,
+          `${t("settings.splitCalls")}: ${onOff(signals.splitCalls())}`,
         ].join("\n")
         context.ui.toast.show({ title: t("settings.title"), message })
       },
@@ -245,6 +246,19 @@ export function makeCommands(
         signals.setDbSync(v)
         kv.set(SETTING_KEYS.dbSync, v)
         api.ui.toast(`${t("settings.dbSync")}: ${onOff(v)}`)
+      },
+    },
+    {
+      id: "opencode-subagent-magazine.subagent.split",
+      title: "SubAgent Magazine: Toggle One Row per Call",
+      description: "Show each call that continues a sub-agent session in its own row",
+      slash: { name: "subagent-split" },
+      palette: true,
+      run: () => {
+        const v = !signals.splitCalls()
+        signals.setSplitCalls(v)
+        kv.set(SETTING_KEYS.splitCalls, v)
+        api.ui.toast(`${t("settings.splitCalls")}: ${onOff(v)}`)
       },
     },
     {

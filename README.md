@@ -62,8 +62,9 @@
 - **漏事件兜底**：周期性校正 + 历史扫描 + 发现轮询，掉事件的子代理也能恢复显示
 - **条目显示开关**：`/subagent-cost` 控制列表内条目费用（4 位小数，默认关；展开区始终显示）；`/subagent-time`、`/subagent-tokens` 控制耗时与 Token（默认开，保持原有显示）
 - **耗时格式**：`/subagent-time-format` 可选 short（默认）/ decimal / clock / compact / seconds
+- **续接调用分行**：`/subagent-split` 让续接同一子会话的调用（subagent 工具带 `sessionID`）各占一行，耗时、Token 与费用只统计该次调用那一轮（默认关，关闭时保持按子会话合并一行）
 - **设置菜单**：`/subagent-sections` 打开原生循环设置菜单（V2）；`/subagent-config` 查看当前设置摘要
-- **斜杠命令**：`/subagent-lang` `/subagent-max` `/subagent-order` `/subagent-scroll` `/subagent-ttl` `/subagent-clear-entries` `/subagent-session` `/subagent-version` `/subagent-clear-running` `/subagent-border` `/subagent-refresh` `/subagent-config` `/subagent-sections` `/subagent-cost` `/subagent-time` `/subagent-tokens` `/subagent-time-format` 动态配置
+- **斜杠命令**：`/subagent-lang` `/subagent-max` `/subagent-order` `/subagent-scroll` `/subagent-ttl` `/subagent-clear-entries` `/subagent-session` `/subagent-version` `/subagent-clear-running` `/subagent-border` `/subagent-refresh` `/subagent-config` `/subagent-sections` `/subagent-cost` `/subagent-time` `/subagent-tokens` `/subagent-time-format` `/subagent-split` 动态配置
 
 ---
 
@@ -165,6 +166,7 @@ npm install -g opencode-subagent-magazine@latest
 | `/subagent-time` | 开关条目耗时 | 列表内耗时显示（默认开） |
 | `/subagent-tokens` | 开关条目 Token | 列表内 Token 显示（默认开） |
 | `/subagent-time-format` | 切换耗时格式 | short（默认 45.32s / 112m35s）/ decimal / clock / compact / seconds |
+| `/subagent-split` | 开关续接调用分行 | 续接同一子会话的每次调用单独一行，耗时与用量只统计该轮（默认关） |
 
 <div align="center">
   <img src="https://raw.githubusercontent.com/Hotakus/opencode-subagent-magazine/master/assets/slash_cmds.png" alt="斜杠命令" width="49%"></img>

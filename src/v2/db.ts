@@ -13,6 +13,7 @@
  */
 
 import { homedir } from "node:os"
+import type { WindowMessage } from "../core/usage"
 
 export interface ChildSessionInfo {
   id: string
@@ -40,6 +41,8 @@ export interface SessionDbIndex {
   info(sid: string): ChildSessionInfo | undefined
   /** 该会话派生的子会话（spawn），用于补全没有工具条目的衍生会话。 */
   children(parentId: string): ChildSessionInfo[] | undefined
+  /** 子会话的 user/assistant/idle 消息（按调用分行时统计单轮用量）。 */
+  windowMessages(sid: string): WindowMessage[] | undefined
 }
 
 type SqlRow = Record<string, unknown>
@@ -173,6 +176,45 @@ const CHILDREN_SQL = `
   FROM session_v2
   WHERE parent_id = ? AND (fork_session_id IS NULL OR fork_session_id = '')
   ORDER BY time_created`
+
+const WINDOW_MESSAGES_SQL = `
+  SELECT type, time_created AS at,
+         json_extract(data, '$.cost') AS cost,
+         json_extract(data, '$.tokens.input') AS input,
+         json_extract(data, '$.tokens.output') AS output,
+         json_extract(data, '$.tokens.reasoning') AS reasoning,
+         json_extract(data, '$.tokens.cache.read') AS cache_read,
+         json_extract(data, '$.tokens.cache.write') AS cache_write,
+         json_extract(data, '$.model.id') AS model_id,
+         json_extract(data, '$.outcome') AS outcome
+  FROM session_message
+  WHERE session_id = ? AND type IN ('user', 'assistant', 'idle')
+  ORDER BY seq`
+
+/** 宿主消息（库行或数据层缓存）→ 单轮统计用的精简消息。 */
+export function toWindowMessage(input: {
+  type: unknown
+  at: unknown
+  cost?: unknown
+  tokens?: unknown
+  model?: unknown
+  outcome?: unknown
+}): WindowMessage | undefined {
+  const type = typeof input.type === "string" ? input.type : undefined
+  const at = Number(input.at)
+  if (!type || !Number.isFinite(at)) return undefined
+  const out: WindowMessage = { type, at }
+  if (type === "assistant") {
+    const cost = Number(input.cost)
+    if (Number.isFinite(cost)) out.cost = cost
+    const t = input.tokens as Record<string, unknown> | undefined
+    if (t && Number(t.output) > 0) out.tokens = contextTokens(t)
+    const model = modelIdOf(input.model)
+    if (model) out.model = model
+  }
+  if (type === "idle" && typeof input.outcome === "string") out.outcome = input.outcome
+  return out
+}
 
 const num = (v: unknown): number | undefined => {
   const n = Number(v)
@@ -342,5 +384,32 @@ export function createSessionDbIndex(enabled: () => boolean): SessionDbIndex | u
     return out
   }
 
-  return { enabled: ready, resolveCall, matchChild, info, children }
+  const windowCache = new Map<string, { list: WindowMessage[]; at: number }>()
+  const windowMessages = (sid: string): WindowMessage[] | undefined => {
+    if (!sid || !ready()) return undefined
+    const hit = windowCache.get(sid)
+    if (hit && Date.now() - hit.at < CALL_MAP_RETRY_MS) return hit.list
+    let list: WindowMessage[] | undefined
+    try {
+      list = []
+      for (const row of db!.query(WINDOW_MESSAGES_SQL).all(sid)) {
+        const m = toWindowMessage({
+          type: row.type,
+          at: row.at,
+          cost: row.cost,
+          tokens: {
+            input: row.input, output: row.output, reasoning: row.reasoning,
+            cache: { read: row.cache_read, write: row.cache_write },
+          },
+          model: row.model_id,
+          outcome: row.outcome,
+        })
+        if (m) list.push(m)
+      }
+    } catch { list = undefined }
+    if (list) windowCache.set(sid, { list, at: Date.now() })
+    return list
+  }
+
+  return { enabled: ready, resolveCall, matchChild, info, children, windowMessages }
 }
