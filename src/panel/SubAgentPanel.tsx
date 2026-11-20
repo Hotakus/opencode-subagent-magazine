@@ -145,7 +145,7 @@ export function SubAgentPanel(props: {
   const isCleared = (c: ReadonlySet<string>, id: string, s?: string, owner?: string) => c.has(id) || Boolean(s && s !== props.sessionId && s !== owner && c.has("sub:" + s))
   const expandCleared = (raw?: Iterable<string>, ...ls: (Iterable<SubEntry> | undefined)[]) => { for (const l of ls) for (const e of l ?? []) if (!isGuessed(e)) rememberTwin(e.id, e.sessionId, ownerOf(e)); return expandEntryTwins(raw) }
   const stripCleared = (m: Map<string, SubEntry>, c: ReadonlySet<string>) => { const n = withoutClearedEntries(m, c); for (const [k, e] of n) if (isGuessed(e)) { if (e.sessionId && isCleared(c, "sub:" + e.sessionId, e.sessionId, ownerOf(e))) n.set(k, { ...e, sessionId: undefined, guessedSid: false } as OwnedEntry) } else if (isCleared(c, e.id, e.sessionId, ownerOf(e))) n.delete(k); return n }
-  // PB1-2: 清除名单按视图分开存（根记录一份，每个子记录一份）。读取时取同一根会话下所有名单的并集；回写与清理只动本视图自己的名单。
+  // 清除名单按视图分开存（根记录一份，每个子记录一份）。读取时取同一根会话下所有名单的并集；回写与清理只动本视图自己的名单。
   const otherRecs = (root: SessionRecord | undefined, own: ChildRecord | undefined): ChildRecord[] => { const all: (ChildRecord | undefined)[] = [root, ...Object.values(root?.children ?? {})]; return all.filter((o): o is ChildRecord => Boolean(o) && o !== own) }
   const otherCleared = (root: SessionRecord | undefined, own: ChildRecord | undefined) => expandEntryTwins(otherRecs(root, own).flatMap((o) => o.clearedIds ?? []))
   const addCleared = (sid: string, ids: Iterable<string>) => { const { parentSid: p, isChild: c } = resolveParent(sid), d = loadSessionData()[p], own = c ? d?.children?.[sid] : d, cur = own?.clearedIds ?? [], oth = otherCleared(d, own), ex = [...ids].filter((x) => x && !cur.includes(x) && !oth.has(x)); if (ex.length) mutateSessionData((lat) => { const r = c ? ensureChildRecord(lat, p, sid) : ensureRootRecord(lat, p); r.clearedIds = [...new Set([...(r.clearedIds ?? []), ...ex])] }) }
@@ -157,7 +157,7 @@ export function SubAgentPanel(props: {
     const link = (id: string | undefined, parent: string) => {
       if (id && id !== parent && !kvParent.has(id)) kvParent.set(id, parent)
     }
-    // PB1-10: 存储损坏时可能出现 null 记录/子记录/条目。先剔除，否则下面的循环抛错，loadSessionData 对所有会话都返回 {}。
+    // 存储损坏时可能出现 null 记录/子记录/条目。先剔除，否则下面的循环抛错，loadSessionData 对所有会话都返回 {}。
     let changed = false
     const normalizeEntries = (r: { entries?: SubEntry[] }, ownerSid: string) => {
       if (Array.isArray(r.entries) && r.entries.some((e) => !e)) { r.entries = r.entries.filter(Boolean); changed = true }
@@ -365,7 +365,7 @@ export function SubAgentPanel(props: {
   const pruneClearedIds = (sid: string, ids: readonly string[]) => {
     if (ids.length === 0) return
     const remove = new Set(ids)
-    // PB1-2: 别的视图记录里还存着的条目，其 id 不能从本名单删掉（那边靠并集才不显示它）；没有可删的 id 时不写盘。
+    // 别的视图记录里还存着的条目，其 id 不能从本名单删掉（那边靠并集才不显示它）；没有可删的 id 时不写盘。
     const plan = (data: Record<string, SessionRecord>) => {
       const { parentSid, isChild } = resolveParent(sid)
       const rec = isChild ? data[parentSid]?.children?.[sid] : data[parentSid]
@@ -1425,7 +1425,7 @@ export function SubAgentPanel(props: {
             }
             enrichCursor = (start + Math.max(1, attempted)) % candidates.length
           }
-          // PB1-12: 已结束的条目每个 tick 轮流重读一条 usage：结束事件时库里的 cost/tokens 可能还是旧值（info 有 5s 缓存），不重读就永远停在旧值。
+          // 已结束的条目每个 tick 轮流重读一条 usage：结束事件时库里的 cost/tokens 可能还是旧值（info 有 5s 缓存），不重读就永远停在旧值。
           // tokens 直接取读到的值（上下文压缩后会变小，库里是多少就显示多少）；cost 和会话累计 totalTokens 只增不减：宿主只加载部分消息时求和偏小，不能盖掉已存的值。
           const finished = [...next].filter(([, e]) => e.sessionId && !isGuessed(e) && e.status !== "running" && e.status !== "cancel_requested")
           if (finished.length > 0) {
