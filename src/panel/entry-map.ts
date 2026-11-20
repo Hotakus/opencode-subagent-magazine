@@ -80,8 +80,9 @@ export function mergeSubEntry(base: SubEntry, incoming: SubEntry): SubEntry {
     sessionId: incoming.sessionId ?? base.sessionId,
     startedAt: minDefined(base.startedAt, incoming.startedAt) ?? base.startedAt,
     endedAt: ended ? (base.endedAt ?? incoming.endedAt ?? Date.now()) : undefined,
-    tokens: maxDefined(base.tokens, incoming.tokens),
+    tokens: incoming.tokens ?? base.tokens, // 上下文大小可升可降（压缩后变小）：新值优先，不取较大值
     cost: maxDefined(base.cost, incoming.cost),
+    totalTokens: maxDefined(base.totalTokens, incoming.totalTokens), // 会话累计只增不减，与 cost 相同
     model: incoming.model ?? base.model,
     todoTotal: maxDefined(base.todoTotal, incoming.todoTotal),
     todoDone: maxDefined(base.todoDone, incoming.todoDone),

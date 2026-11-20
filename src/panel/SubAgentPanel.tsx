@@ -19,10 +19,15 @@ import { SUBAGENT_TOOLS, isBackgroundInput } from "../core/types"
 import { visualWidth, truncate, fmtDuration, fmtTokens, safeErrorMsg } from "../core/format"
 import { rgb, desaturateTo, dimColor, FALLBACK, MAX_SAT } from "../core/color"
 import { KV_PREFIX, updateSessionData } from "../core/kv"
-import type { PanelApi, PanelEvent } from "./panel-api"
-import { globalEntryCache, clearTick } from "./store"
-import { isDirectChildSession } from "./session-routing"
+import type { ChildSessionLike, PanelApi, PanelEvent } from "./panel-api"
+import { globalEntryCache, clearTick, entryTwins, expandEntryTwins, rememberEntryTwin, type TwinEntry } from "./store"
+import { isDirectChildSession, resolveRootSessionId, walkSessionTree } from "./session-routing"
 import { compactSubEntry, findSubEntryKey, mergeSubEntriesForPersist, PERSISTED_PROMPT_MAX, prunableClearedIds, withoutClearedEntries, upsertSubEntry } from "./entry-map"
+
+// Legacy unlinked rows inherit the owner of the view that stored them.
+type OwnedEntry = TwinEntry
+const ownerOf = (entry: SubEntry) => (entry as OwnedEntry).ownerSid
+const isGuessed = (entry: SubEntry) => (entry as OwnedEntry).guessedSid === true
 
 /** Entry line left prefix: icon + space + status dot + space */
 const LEFT_PAD = 4
@@ -94,7 +99,7 @@ export function SubAgentPanel(props: {
   const loadSessionData = (): Record<string, SessionRecord> => {
     try {
       const raw = props.api.kv.get(SESSION_DATA_KEY, "{}")
-      return JSON.parse(String(raw))
+      const data: Record<string, SessionRecord> = JSON.parse(String(raw)); migrateSessionDataInPlace(data); return data
     } catch { return {} }
   }
 
@@ -128,15 +133,105 @@ export function SubAgentPanel(props: {
     return parent.children[sid]
   }
 
-  /** 将任意 session ID 解析为父会话 ID + 是否子会话。
-   *  通过 SDK session.get(sid).parentID 判断，无 parentID 即为主会话。 */
+  const getSessionSafe = (id: string) => { try { return props.api.session.get(id) } catch { return undefined } }
+
+  /** 将任意 session ID 沿 parentID 链解析为根会话 ID + 是否后代子会话。 */
   const resolveParent = (sid: string): { parentSid: string; isChild: boolean } => {
-    try {
-      const session = props.api.session.get(sid)
-      const parentID = (session as any)?.parentID as string | undefined
-      if (parentID) return { parentSid: parentID, isChild: true }
-    } catch {}
-    return { parentSid: sid, isChild: false }
+    const { rootSid, isChild } = resolveRootSessionId(sid, getSessionSafe)
+    return { parentSid: rootSid, isChild }
+  }
+
+  const rememberTwin = (id?: string, s?: string, owner?: string) => { if (s && s !== props.sessionId && s !== owner) rememberEntryTwin(id, s, owner) }
+  const isCleared = (c: ReadonlySet<string>, id: string, s?: string, owner?: string) => c.has(id) || Boolean(s && s !== props.sessionId && s !== owner && c.has("sub:" + s))
+  const expandCleared = (raw?: Iterable<string>, ...ls: (Iterable<SubEntry> | undefined)[]) => { for (const l of ls) for (const e of l ?? []) if (!isGuessed(e)) rememberTwin(e.id, e.sessionId, ownerOf(e)); return expandEntryTwins(raw) }
+  const stripCleared = (m: Map<string, SubEntry>, c: ReadonlySet<string>) => { const n = withoutClearedEntries(m, c); for (const [k, e] of n) if (isGuessed(e)) { if (e.sessionId && isCleared(c, "sub:" + e.sessionId, e.sessionId, ownerOf(e))) n.set(k, { ...e, sessionId: undefined, guessedSid: false } as OwnedEntry) } else if (isCleared(c, e.id, e.sessionId, ownerOf(e))) n.delete(k); return n }
+  // 清除名单按视图分开存（根记录一份，每个子记录一份）。读取时取同一根会话下所有名单的并集；回写与清理只动本视图自己的名单。
+  const otherRecs = (root: SessionRecord | undefined, own: ChildRecord | undefined): ChildRecord[] => { const all: (ChildRecord | undefined)[] = [root, ...Object.values(root?.children ?? {})]; return all.filter((o): o is ChildRecord => Boolean(o) && o !== own) }
+  const otherCleared = (root: SessionRecord | undefined, own: ChildRecord | undefined) => expandEntryTwins(otherRecs(root, own).flatMap((o) => o.clearedIds ?? []))
+  const addCleared = (sid: string, ids: Iterable<string>) => { const { parentSid: p, isChild: c } = resolveParent(sid), d = loadSessionData()[p], own = c ? d?.children?.[sid] : d, cur = own?.clearedIds ?? [], oth = otherCleared(d, own), ex = [...ids].filter((x) => x && !cur.includes(x) && !oth.has(x)); if (ex.length) mutateSessionData((lat) => { const r = c ? ensureChildRecord(lat, p, sid) : ensureRootRecord(lat, p); r.clearedIds = [...new Set([...(r.clearedIds ?? []), ...ex])] }) }
+  const readCleared = (sid: string, ...ls: (Iterable<SubEntry> | undefined)[]) => { const { parentSid: p, isChild: c } = resolveParent(sid), d = loadSessionData()[p], s = c ? d?.children?.[sid] : d, exp = expandCleared(s?.clearedIds, s?.entries, ...ls); if (s?.clearedIds?.length) addCleared(sid, exp); const oth = otherCleared(d, s); for (const x of oth) exp.add(x); return exp }
+  const applyResolvedChild = (id: string, e: SubEntry, next: Map<string, SubEntry>, cleared: ReadonlySet<string>): { entry?: SubEntry; changed: boolean } => { const callId = String(e.id).replace(/^tool:/, ""), o = ownerOf(e); let ex: string | undefined; try { ex = props.api.session.resolveChild?.({ parentId: o ?? props.sessionId, callId }) } catch {} if (ex) { rememberTwin(e.id, ex, o); if (isCleared(readCleared(props.sessionId), e.id, ex, o)) { next.delete(id); return { changed: true } } if (e.sessionId === ex && !isGuessed(e)) return { entry: e, changed: false }; const u: OwnedEntry = { ...e, sessionId: ex, guessedSid: false }; next.set(id, u); return { entry: u, changed: true } } if (o === undefined) return { entry: e, changed: false }; const excludeIds = new Set<string>(); for (const c of cleared) if (c.startsWith("sub:")) excludeIds.add(c.slice(4)); for (const [k, x] of next) if (k !== e.id && x.sessionId) excludeIds.add(x.sessionId); for (const [k, ts] of entryTwins) if (k.startsWith("sub:") && [...ts].some((t) => t !== e.id)) excludeIds.add(k.slice(4)); let g: string | undefined; try { g = props.api.session.resolveChild?.({ parentId: o, callId, agent: e.agent, startedAt: e.startedAt, excludeIds }) } catch {} if (!g || excludeIds.has(g) || isCleared(cleared, "sub:" + g, g, o) || (e.sessionId === g && isGuessed(e))) return { entry: e, changed: false }; const u: OwnedEntry = { ...e, sessionId: g, guessedSid: true }; next.set(id, u); return { entry: u, changed: true } }
+
+  function migrateSessionDataInPlace(data: Record<string, SessionRecord>): boolean {
+    const kvParent = new Map<string, string>()
+    const link = (id: string | undefined, parent: string) => {
+      if (id && id !== parent && !kvParent.has(id)) kvParent.set(id, parent)
+    }
+    // 存储损坏时可能出现 null 记录/子记录/条目。先剔除，否则下面的循环抛错，loadSessionData 对所有会话都返回 {}。
+    let changed = false
+    const normalizeEntries = (r: { entries?: SubEntry[] }, ownerSid: string) => {
+      if (Array.isArray(r.entries) && r.entries.some((e) => !e)) { r.entries = r.entries.filter(Boolean); changed = true }
+      for (const e of r.entries ?? []) if (ownerOf(e) === undefined && !e.sessionId) { (e as OwnedEntry).ownerSid = ownerSid; changed = true }
+    }
+    for (const [k, rec] of Object.entries(data)) {
+      if (!rec) { delete data[k]; changed = true; continue }
+      normalizeEntries(rec, k)
+      for (const [cId, cRec] of Object.entries(rec.children ?? {})) {
+        if (!cRec) { delete rec.children[cId]; changed = true } else normalizeEntries(cRec, cId)
+      }
+    }
+    for (const [k, rec] of Object.entries(data)) {
+      for (const e of rec.entries ?? []) link(e.sessionId, k)
+      for (const [cId, cRec] of Object.entries(rec.children ?? {})) {
+        link(cId, k)
+        for (const e of cRec.entries ?? []) link(e.sessionId, cId)
+      }
+    }
+    const lookup = (id: string) => {
+      const p = getSessionSafe(id)?.parentID ?? kvParent.get(id)
+      return p ? { id, parentID: p } : undefined
+    }
+    const mergeChild = (rootSid: string, childSid: string, src: Partial<ChildRecord>, srcTs: number) => {
+      const hadRoot = Boolean(data[rootSid])
+      const rootRec = ensureRootRecord(data, rootSid)
+      rootRec.ts = hadRoot ? Math.max(rootRec.ts || 0, srcTs || 0) : (srcTs || 0)
+      const dst = ensureChildRecord(data, rootSid, childSid)
+      const cleared = [...expandCleared([...(dst.clearedIds ?? []), ...(src.clearedIds ?? [])], src.entries, dst.entries)]
+      if (cleared.length > 0) dst.clearedIds = cleared
+      dst.entries = [...mergeSubEntriesForPersist(src.entries ?? [], dst.entries ?? [], cleared).values()]
+      if (!dst.scroll && src.scroll) dst.scroll = src.scroll
+      if (!dst.expanded && src.expanded && !cleared.includes(src.expanded)) dst.expanded = src.expanded
+    }
+    for (const key of Object.keys(data)) {
+      const rec = data[key]
+      const childKeys = Object.keys(rec.children ?? {})
+      for (const cId of childKeys) {
+        const cRes = resolveRootSessionId(cId, (id) => lookup(id) ?? (id === cId ? { id: cId, parentID: key } : undefined))
+        if (cRes.isChild && cRes.rootSid !== key && !lookup(cRes.rootSid)?.parentID) {
+          mergeChild(cRes.rootSid, cId, rec.children[cId] ?? {}, rec.ts ?? 0)
+          delete rec.children[cId]
+          changed = true
+        }
+      }
+      const kRes = resolveRootSessionId(key, lookup)
+      const rem = Object.keys(rec.children ?? {}).length
+      if (kRes.isChild && kRes.rootSid !== key && !lookup(kRes.rootSid)?.parentID) {
+        if (rec.entries?.length || rec.clearedIds?.length || rec.scroll || rec.expanded) {
+          mergeChild(kRes.rootSid, key, rec, rec.ts ?? 0)
+          // 内容已迁出即清空：否则每次加载都会重复合并并判定为已改动，导致反复回写。
+          rec.entries = []
+          delete rec.clearedIds
+          rec.scroll = 0
+          rec.expanded = ""
+          changed = true
+        } else {
+          const hadRoot = Boolean(data[kRes.rootSid])
+          const rootRec = ensureRootRecord(data, kRes.rootSid)
+          if (!hadRoot || (rec.ts ?? 0) > rootRec.ts) {
+            rootRec.ts = rec.ts ?? 0
+            changed = true
+          }
+        }
+        if (rem === 0) {
+          delete data[key]
+          changed = true
+        }
+      } else if (childKeys.length > 0 && rem === 0 && !(rec.entries?.length) && !(rec.clearedIds?.length) && !rec.scroll && !rec.expanded) {
+        delete data[key]
+        changed = true
+      }
+    }
+    return changed
   }
 
   const loadEntries = (sid: string): Map<string, SubEntry> => {
@@ -153,9 +248,11 @@ export function SubAgentPanel(props: {
         }
       }
     } catch {}
-    return m
+    return stripCleared(m, readCleared(sid, m.values()))
   }
 
+  // Stored rows that the clear list of another view covers are dropped before the merge, so a late link cannot leave a cleared row in storage.
+  const storedWithout = (stored: SubEntry[] | undefined, c: ReadonlySet<string>) => [...stripCleared(new Map((stored ?? []).map((e) => [e.id, e] as [string, SubEntry])), c).values()]
   let persistTimer: ReturnType<typeof setTimeout> | undefined
   const persistEntries = (sid: string, entries: Map<string, SubEntry>) => {
     clearTimeout(persistTimer)
@@ -167,12 +264,12 @@ export function SubAgentPanel(props: {
             const parent = ensureRootRecord(data, parentSid)
             const child = ensureChildRecord(data, parentSid, sid)
             // 已被手动清除的条目永不回填（即使本快照来自清除前的旧状态）。
-            child.entries = [...mergeSubEntriesForPersist(child.entries ?? [], entries.values(), child.clearedIds).values()]
+            child.entries = [...mergeSubEntriesForPersist(storedWithout(child.entries, otherCleared(parent, child)), entries.values(), child.clearedIds).values()]
             parent.ts = Date.now()
           } else {
             const rec = ensureRootRecord(data, sid)
             rec.ts = Date.now()
-            rec.entries = [...mergeSubEntriesForPersist(rec.entries ?? [], entries.values(), rec.clearedIds).values()]
+            rec.entries = [...mergeSubEntriesForPersist(storedWithout(rec.entries, otherCleared(rec, rec)), entries.values(), rec.clearedIds).values()]
           }
         })
       } catch {}
@@ -210,10 +307,15 @@ export function SubAgentPanel(props: {
   }
 
   const cleanupOldSessions = () => {
-    if (ttlDays <= 0) return  // 无期限，跳过清理
     try {
+      const probe: Record<string, SessionRecord> = JSON.parse(String(props.api.kv.get(SESSION_DATA_KEY, "{}")))
+      const willMigrate = migrateSessionDataInPlace(probe)
       const cutoff = Date.now() - TTL_MS
+      const willDelete = ttlDays > 0 && Object.keys(probe).some((sid) => (probe[sid]?.ts ?? 0) < cutoff)
+      if (!willMigrate && !willDelete) return
       mutateSessionData((data) => {
+        migrateSessionDataInPlace(data)
+        if (ttlDays <= 0) return  // 无期限，跳过清理
         for (const sid of Object.keys(data)) {
           if (data[sid].ts < cutoff) delete data[sid]
         }
@@ -263,14 +365,19 @@ export function SubAgentPanel(props: {
   const pruneClearedIds = (sid: string, ids: readonly string[]) => {
     if (ids.length === 0) return
     const remove = new Set(ids)
+    // 别的视图记录里还存着的条目，其 id 不能从本名单删掉（那边靠并集才不显示它）；没有可删的 id 时不写盘。
+    const plan = (data: Record<string, SessionRecord>) => {
+      const { parentSid, isChild } = resolveParent(sid)
+      const rec = isChild ? data[parentSid]?.children?.[sid] : data[parentSid]
+      if (!rec?.clearedIds?.length) return undefined
+      const held = new Set<string>()
+      for (const o of otherRecs(data[parentSid], rec)) for (const e of o.entries ?? []) if (e) { held.add(e.id); if (e.sessionId) held.add("sub:" + e.sessionId) }
+      const next = rec.clearedIds.filter((id) => !remove.has(id) || held.has(id))
+      return next.length !== rec.clearedIds.length ? { rec, next } : undefined
+    }
     try {
-      mutateSessionData((data) => {
-        const { parentSid, isChild } = resolveParent(sid)
-        const rec = isChild ? data[parentSid]?.children?.[sid] : data[parentSid]
-        if (!rec?.clearedIds?.length) return
-        const next = rec.clearedIds.filter((id) => !remove.has(id))
-        if (next.length !== rec.clearedIds.length) rec.clearedIds = next
-      })
+      if (!plan(loadSessionData())) return
+      mutateSessionData((data) => { const p = plan(data); if (p) p.rec.clearedIds = p.next })
     } catch {}
   }
 
@@ -281,7 +388,7 @@ export function SubAgentPanel(props: {
     arg: Map<string, SubEntry> | ((prev: Map<string, SubEntry>) => Map<string, SubEntry>),
   ) => {
     setEntryMapRaw((prev) => {
-      const next = typeof arg === "function" ? (arg as Function)(prev) : arg
+      const raw = typeof arg === "function" ? arg(prev) : arg, next = stripCleared(raw, readCleared(props.sessionId, prev.values(), raw.values()))
 
       // entry 状态落定（done/error）时立即持久化到 KV，跳过常规 debounce，
       // 确保跨视图的状态一致性。
@@ -302,12 +409,12 @@ export function SubAgentPanel(props: {
             if (isChild) {
               const parent = ensureRootRecord(data, parentSid)
               const child = ensureChildRecord(data, parentSid, props.sessionId)
-              child.entries = [...mergeSubEntriesForPersist(child.entries ?? [], next.values(), child.clearedIds).values()]
+              child.entries = [...mergeSubEntriesForPersist(storedWithout(child.entries, otherCleared(parent, child)), next.values(), child.clearedIds).values()]
               parent.ts = Date.now()
             } else {
               const rec = ensureRootRecord(data, props.sessionId)
               rec.ts = Date.now()
-              rec.entries = [...mergeSubEntriesForPersist(rec.entries ?? [], next.values(), rec.clearedIds).values()]
+              rec.entries = [...mergeSubEntriesForPersist(storedWithout(rec.entries, otherCleared(rec, rec)), next.values(), rec.clearedIds).values()]
             }
           })
         } catch {}
@@ -359,7 +466,7 @@ export function SubAgentPanel(props: {
 
   // ── upsert ──
   const upsertEntry = (
-    partial: Omit<SubEntry, "startedAt" | "endedAt"> & { startedAt?: number }
+    partial: Omit<SubEntry, "startedAt" | "endedAt"> & { startedAt?: number; ownerSid?: string; guessedSid?: boolean }
   ) => {
     setEntryMap((prev) => upsertSubEntry(prev, partial))
   }
@@ -456,7 +563,7 @@ export function SubAgentPanel(props: {
     // V2 事件流是全局的——若 payload 带发起会话 ID，则只归账到正在查看的会话，
     // 避免其他会话的子代理写进当前侧边栏；V1 宿主已按会话 scope，不传 sessionID。
     const eventSid = event.payload?.sessionID !== undefined ? String(event.payload.sessionID) : undefined
-    if (event.scope === "global" && eventSid !== props.sessionId) {
+    if (event.scope === "global" && eventSid !== props.sessionId && !(eventSid && isDescendantOf(eventSid, props.sessionId))) {
       return
     }
 
@@ -468,10 +575,10 @@ export function SubAgentPanel(props: {
       const title = desc || truncate(prompt.replace(/\n/g, " ").replace(/\s+/g, " ").trim(), 40)
 
       const id = `sub:${String(part.id ?? crypto.randomUUID())}`
-      const subSid = part.sessionID !== undefined ? String(part.sessionID) : undefined
+      const ownerSid = eventSid ?? (part.sessionID !== undefined ? String(part.sessionID) : undefined) ?? props.sessionId, subMeta = partMetadata(part as Record<string, any>, part.state as Record<string, unknown> | undefined), rawSub = subMeta?.session_id !== undefined ? String(subMeta.session_id) : subMeta?.sessionId !== undefined ? String(subMeta.sessionId) : subMeta?.sessionID !== undefined ? String(subMeta.sessionID) : undefined, subSid = rawSub && rawSub !== ownerSid ? rawSub : undefined
       const partModel = part.model as { modelID?: string } | undefined
       const modelId = partModel?.modelID ? String(partModel.modelID) : undefined
-      upsertEntry({ id, title, agent, prompt, sessionId: subSid, status: "running", model: modelId, origin: "sub" })
+      upsertEntry({ id, title, agent, prompt, ...(subSid === undefined ? {} : { sessionId: subSid, guessedSid: false }), status: "running", model: modelId, origin: "sub", ownerSid })
     }
 
     // ToolPart
@@ -494,6 +601,7 @@ export function SubAgentPanel(props: {
         const stMeta = partMetadata(part as Record<string, any>, st)
         const errorSid = stMeta?.session_id !== undefined ? String(stMeta.session_id)
           : stMeta?.sessionId !== undefined ? String(stMeta.sessionId)
+          : stMeta?.sessionID !== undefined ? String(stMeta.sessionID)
           : undefined
         const key = findSubEntryKey(entryMap(), id, errorSid)
         const existing = key ? entryMap().get(key) : undefined
@@ -521,7 +629,7 @@ export function SubAgentPanel(props: {
       // otherwise (failed spawn, invalid agent) mark as done so the entry isn't stuck forever.
       if (isBackgroundInput(input) && status === "done") {
         const stMetaCheck = partMetadata(part as Record<string, any>, st)
-        const hasChild = stMetaCheck?.session_id !== undefined || stMetaCheck?.sessionId !== undefined
+        const hasChild = stMetaCheck?.session_id !== undefined || stMetaCheck?.sessionId !== undefined || stMetaCheck?.sessionID !== undefined
         if (hasChild) status = "running"
       }
 
@@ -536,8 +644,9 @@ export function SubAgentPanel(props: {
       const stMeta = partMetadata(part as Record<string, any>, st)
       const subSid = stMeta?.session_id !== undefined ? String(stMeta.session_id)
         : stMeta?.sessionId !== undefined ? String(stMeta.sessionId)
+        : stMeta?.sessionID !== undefined ? String(stMeta.sessionID)
         : undefined
-      upsertEntry({ id, title, agent, prompt, sessionId: subSid, status, origin: "tool", background: isBackgroundInput(input) })
+      upsertEntry({ id, title, agent, prompt, ...(subSid === undefined ? {} : { sessionId: subSid, guessedSid: false }), status, origin: "tool", background: isBackgroundInput(input), ownerSid: eventSid ?? (part.sessionID !== undefined ? String(part.sessionID) : undefined) ?? props.sessionId })
     }
   }
 
@@ -551,7 +660,8 @@ export function SubAgentPanel(props: {
     if (isGlobalEvent) {
       try { eventSession = props.api.session.get(sid) } catch { eventSession = undefined }
     }
-    const isCurrentChild = !isGlobalEvent || isDirectChildSession(props.sessionId, sid, eventSession)
+    const isCurrentChild = !isGlobalEvent || isDirectChildSession(props.sessionId, sid, eventSession, getSessionSafe)
+    const directParentSid = (eventSession ?? getSessionSafe(sid))?.parentID
 
     const sessionTokens = props.api.usage.readSessionTokens(sid)
     const sessionCost = props.api.usage.readSessionCost(sid)
@@ -587,6 +697,7 @@ export function SubAgentPanel(props: {
       targetSid: string,
       targetStatus: SubStatus,
       nowTs: number,
+      allowFallback: boolean,
     ): boolean => {
       // 精确匹配：sessionId 对得上 + 状态为 running / cancel_requested
       for (const [, entry] of entriesMap) {
@@ -604,11 +715,13 @@ export function SubAgentPanel(props: {
         }
       }
       // 回退：sessionId 未关联但 agent 名匹配 + 状态为 running / cancel_requested
-      if (sessionAgent) {
+      if (allowFallback && sessionAgent && ![...entriesMap.values()].some((x) => x.sessionId === targetSid)) {
         const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9-]/g, "")
         const saNorm = normalize(sessionAgent)
         let best: { entry: SubEntry; gap: number } | null = null
         for (const [, entry] of entriesMap) {
+          if (ownerOf(entry) !== directParentSid) continue
+          if (entry.sessionId && entry.sessionId !== targetSid) continue
           if (entry.status !== "running" && entry.status !== "cancel_requested") continue
           const eaNorm = normalize(entry.agent)
           if (!eaNorm || !saNorm) continue
@@ -618,6 +731,7 @@ export function SubAgentPanel(props: {
         }
         if (!best) {
           for (const [, entry] of entriesMap) {
+            if (ownerOf(entry) !== directParentSid) continue
             if (entry.status !== "running" && entry.status !== "cancel_requested") continue
             if (entry.sessionId) continue
             const gap = nowTs - (entry.startedAt || 0)
@@ -633,7 +747,8 @@ export function SubAgentPanel(props: {
           best.entry.model = best.entry.model ?? sessionModel
           best.entry.todoTotal = best.entry.todoTotal ?? sessionTodo?.total
           best.entry.todoDone = best.entry.todoDone ?? sessionTodo?.done
-          best.entry.sessionId = targetSid
+          if (!best.entry.sessionId) (best.entry as OwnedEntry).guessedSid = true
+          best.entry.sessionId = best.entry.sessionId ?? targetSid
           best.entry.error = errorMsg || best.entry.error
           return true
         }
@@ -664,7 +779,7 @@ export function SubAgentPanel(props: {
         })
         changed = true
       }
-      if (!changed && sessionAgent && isCurrentChild) {
+      if (!changed && sessionAgent && isCurrentChild && sid !== props.sessionId && directParentSid === props.sessionId && !readCleared(props.sessionId, prev.values()).has("sub:" + sid) && ![...next.values()].some((x) => x.sessionId === sid)) {
         const nowTs = Date.now()
         const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9-]/g, "")
         const saNorm = normalize(sessionAgent)
@@ -672,6 +787,8 @@ export function SubAgentPanel(props: {
 
         // Phase 1: try matching by agent name（agent 名有交集）
         for (const [id, entry] of next) {
+          if (ownerOf(entry) !== directParentSid) continue
+          if (entry.sessionId && entry.sessionId !== sid) continue
           if (entry.status !== "running" && entry.status !== "cancel_requested") continue
           const eaNorm = normalize(entry.agent)
           if (!eaNorm || !saNorm) continue
@@ -684,6 +801,7 @@ export function SubAgentPanel(props: {
         // fall back to time proximity for entries that have no sessionId yet
         if (!best) {
           for (const [id, entry] of next) {
+            if (ownerOf(entry) !== directParentSid) continue
             if (entry.status !== "running" && entry.status !== "cancel_requested") continue
             if (entry.sessionId) continue
             const gap = nowTs - (entry.startedAt || 0)
@@ -698,7 +816,8 @@ export function SubAgentPanel(props: {
             ...entry, status: finalStatus, endedAt: nowTs,
             tokens: sessionTokens || entry.tokens,
             cost: sessionCost || entry.cost,
-            sessionId: sid,
+            ...(entry.sessionId ? {} : { guessedSid: true }),
+            sessionId: entry.sessionId ?? sid,
             error: errorMsg || entry.error,
           })
           changed = true
@@ -710,7 +829,8 @@ export function SubAgentPanel(props: {
     // 当子代理所属的父 session 与当前视图不同时，通过模块级缓存定位
     // 并更新父 session 的 entry 状态，随后写回 KV。
     try {
-      const parentSid = (isGlobalEvent ? eventSession : props.api.session.get(sid))?.parentID
+      const { rootSid, ancestorIds } = resolveRootSessionId(sid, (id) => (id === sid ? (eventSession ?? getSessionSafe(id)) : getSessionSafe(id)))
+      for (const parentSid of ancestorIds) {
       if (parentSid && parentSid !== props.sessionId) {
         // 优先从模块级缓存获取父 session 的 entries，不受当前视图切换影响
         const parentCache = globalEntryCache.get(parentSid)
@@ -718,27 +838,24 @@ export function SubAgentPanel(props: {
         let found = false
 
         if (parentCache) {
-          found = tryMatchAndUpdate(parentCache, sid, status, nowTs)
+          found = tryMatchAndUpdate(parentCache, sid, status, nowTs, parentSid === directParentSid && !readCleared(parentSid).has("sub:" + sid))
         }
 
         // 缓存未命中时回退到 KV 读取
         if (!found) {
           const data = loadSessionData()
-          const rec = data[parentSid]
+          const rec = parentSid === rootSid ? data[rootSid] : data[rootSid]?.children?.[parentSid]
           if (rec?.entries?.length) {
             const fallbackMap = new Map(rec.entries.map((e: SubEntry) => [e.id, e]))
-            found = tryMatchAndUpdate(fallbackMap, sid, status, nowTs)
+            found = tryMatchAndUpdate(fallbackMap, sid, status, nowTs, parentSid === directParentSid && !readCleared(parentSid).has("sub:" + sid))
             if (found) {
               // 回退命中后写入 KV 并回填缓存。
               // merge（而非整表替换）：其他实例写入的新条目不能被旧缓存覆盖。
               globalEntryCache.set(parentSid, fallbackMap)
               mutateSessionData((latest) => {
-                const latestRec = latest[parentSid]
-                latest[parentSid] = {
-                  ...(latestRec ?? rec),
-                  ts: nowTs,
-                  entries: [...mergeSubEntriesForPersist(latestRec?.entries ?? [], fallbackMap.values(), latestRec?.clearedIds).values()],
-                }
+                const target = parentSid === rootSid ? ensureRootRecord(latest, rootSid) : ensureChildRecord(latest, rootSid, parentSid)
+                target.entries = [...mergeSubEntriesForPersist(target.entries ?? [], fallbackMap.values(), target.clearedIds).values()]
+                ensureRootRecord(latest, rootSid).ts = nowTs
               })
             }
           }
@@ -746,15 +863,13 @@ export function SubAgentPanel(props: {
 
         // 将模块级缓存中的最新状态 merge 进 KV（缓存可能缺少其他实例的新条目）
         if (found && parentCache) {
-          mutateSessionData((data) => {
-            const rec = data[parentSid]
-            data[parentSid] = {
-              ...(rec ?? { entries: [], scroll: 0, expanded: "", children: {}, ts: nowTs }),
-              ts: nowTs,
-              entries: [...mergeSubEntriesForPersist(rec?.entries ?? [], parentCache.values(), rec?.clearedIds).values()],
-            }
+          mutateSessionData((latest) => {
+            const target = parentSid === rootSid ? ensureRootRecord(latest, rootSid) : ensureChildRecord(latest, rootSid, parentSid)
+            target.entries = [...mergeSubEntriesForPersist(target.entries ?? [], parentCache.values(), target.clearedIds).values()]
+            ensureRootRecord(latest, rootSid).ts = nowTs
           })
         }
+      }
       }
     } catch {}
 
@@ -797,23 +912,7 @@ export function SubAgentPanel(props: {
    *  纯 map 变换——是否持久化由调用方决定。 */
   const settleIdleEntries = (prev: Map<string, SubEntry>): Map<string, SubEntry> => {
     let changed = false
-    const next = new Map(prev)
-    for (const [id, entry] of next) {
-      if (entry.status !== "running" && entry.status !== "cancel_requested") continue
-      // 无链接条目：先用宿主/本地库按 call id 回填子会话 id；
-      // 回填不了就维持原状（不猜测、不设时间阈值）。
-      let sid = entry.sessionId
-      if (!sid) {
-        try {
-          const callId = String(entry.id).replace(/^tool:/, "")
-          sid = props.api.session.resolveChild?.({
-            parentId: props.sessionId, callId, agent: entry.agent, startedAt: entry.startedAt,
-          })
-        } catch {}
-        if (!sid) continue
-        next.set(id, { ...entry, sessionId: sid })
-        changed = true
-      }
+    const next = new Map(prev), cleared = readCleared(props.sessionId, prev.values()); for (let [id, entry] of next) { if (entry.status !== "running" && entry.status !== "cancel_requested") continue; let sid = entry.sessionId; if (!sid || isGuessed(entry)) { const r = applyResolvedChild(id, entry, next, cleared); if (r.changed) changed = true; if (!r.entry) continue; entry = r.entry; sid = entry.sessionId; if (!sid) continue }
       try {
         const st = props.api.session.status(sid)
         if (!st || st.type !== "idle") continue
@@ -845,6 +944,7 @@ export function SubAgentPanel(props: {
 
   /** 扫描会话历史并 merge 进 entry map。
    *  消息数据尚不可用时返回 false，供调用方重试。 */
+  let lastScanIncomplete = false
   const runSessionScan = (sid: string, replace: boolean): boolean => {
     let msgs: unknown[] | undefined
     try { msgs = props.api.session.messages(sid) } catch {}
@@ -852,23 +952,26 @@ export function SubAgentPanel(props: {
     // 清除名单里、本次扫描确认状态为 error 的 tool id：error part 不会重建条目，
     // 扫描结束后可安全从名单移除（见 prunableClearedIds）。
     const seenErrorIds = new Set<string>()
+    const pendingDescendantSids = new Set<string>()
     let scanClearedIds = new Set<string>()
     // scan 结果先写入内存（setEntryMapRaw）；scan 末尾统一走 persistEntries 的 merge-safe 落盘。
     setEntryMapRaw((prev) => {
+      try { if (migrateSessionDataInPlace(JSON.parse(String(props.api.kv.get(SESSION_DATA_KEY, "{}"))))) mutateSessionData((d) => { migrateSessionDataInPlace(d) }) } catch {}
       // 从 KV 加载当前会话的清除名单：既用于跳过被手动清除的历史条目，
       // 也用于剔除缓存/KV 中残留的已清除条目（见 withoutClearedEntries）。
-      const { parentSid: scanPSid, isChild: scanChild } = resolveParent(sid)
-      const scanRec = loadSessionData()[scanPSid]
-      const clearedIds = new Set(scanChild ? scanRec?.children?.[sid]?.clearedIds : scanRec?.clearedIds)
-      scanClearedIds = clearedIds
-      // 优先从模块级缓存加载，KV 仅作缓存未命中时的回退；
-      // 已清除条目一律丢弃，防止过期缓存让它们继续存活。
-      const next = withoutClearedEntries(
-        replace ? new Map(globalEntryCache.get(sid) ?? loadEntries(sid)) : new Map(prev),
-        clearedIds,
-      )
+      const base = replace ? new Map(globalEntryCache.get(sid) ?? loadEntries(sid)) : new Map(prev), clearedIds = readCleared(sid, prev.values(), base.values()); scanClearedIds = clearedIds; const next = stripCleared(base, clearedIds)
       try {
-        for (const msg of msgs as any[]) {
+        walkSessionTree(sid, (currSid) => {
+          const nextSids: string[] = currSid === sid ? [
+            ...(props.api.session.listChildren?.(sid) ?? []).map((c) => c.id),
+            ...[...next.values()].map((e) => e.sessionId).filter((x): x is string => Boolean(x)),
+          ] : []
+          let scan: unknown[] | undefined = msgs
+          if (currSid !== sid) {
+            try { scan = props.api.session.messages(currSid) } catch { scan = undefined }
+            if (!scan || (scan as any[]).length === 0) pendingDescendantSids.add(currSid)
+          }
+          for (const msg of (scan ?? []) as any[]) {
           const parts = props.api.session.part((msg as any).id) ?? []
           for (const partRaw of parts) {
             const part = partRaw as Record<string, unknown>
@@ -894,18 +997,17 @@ export function SubAgentPanel(props: {
               // 宿主缓存/历史缺少子会话链接时，用本地库按工具 call id 回填。
               if (!scanSubSid) {
                 try {
-                  scanSubSid = props.api.session.resolveChild?.({ parentId: sid, callId: String(part.id) })
+                  scanSubSid = props.api.session.resolveChild?.({ parentId: currSid, callId: String(part.id) }) ?? (currSid !== sid ? props.api.session.resolveChild?.({ parentId: sid, callId: String(part.id) }) : undefined)
                 } catch {}
               }
+              if (scanSubSid) { rememberTwin(id, scanSubSid, currSid); nextSids.push(scanSubSid) }
               const existingKey = findSubEntryKey(next, id, scanSubSid)
-              const exists = existingKey ? next.get(existingKey) : undefined
+              let exists = existingKey ? next.get(existingKey) : undefined
+              if (existingKey && exists) { const owned: OwnedEntry = { ...exists, ownerSid: currSid }; next.set(existingKey, owned); exists = owned }
 
               // 已手动清除的条目：scan 发现但不在内存 → 跳过重建。
               // error part 永远不会重建条目——顺手记入可清理名单。
-              if (!exists && clearedIds.has(id)) {
-                if (rawStatus === "error") seenErrorIds.add(id)
-                continue
-              }
+              if (isCleared(clearedIds, id, scanSubSid, currSid)) { if (existingKey) next.delete(existingKey); next.delete(id); if (rawStatus === "error") { if (clearedIds.has(id)) seenErrorIds.add(id) } else { clearedIds.add(id); if (scanSubSid) clearedIds.add("sub:" + scanSubSid) } continue }
 
               // Only create entries for tool calls that entered execution.
               // "pending" / empty: skip new entries; allow heuristics for existing ones below.
@@ -927,7 +1029,8 @@ export function SubAgentPanel(props: {
                 exists.status !== "cancel_requested"
               const needsRepair =
                 settled &&
-                (exists!.sessionId === undefined ||
+                (exists!.origin === "sub" ||
+                  exists!.sessionId === undefined ||
                   exists!.tokens === undefined ||
                   exists!.cost === undefined ||
                   !validModel(exists!.model))
@@ -964,7 +1067,7 @@ export function SubAgentPanel(props: {
                     // 无终态证据时不猜测：等本地库/事件回填子会话状态后由 reconcile 落定。
                     continue
                   }
-                } else {
+                } else if ((exists.sessionId || !scanSubSid) && exists.origin !== "sub") {
                   continue
                 }
               }
@@ -985,31 +1088,42 @@ export function SubAgentPanel(props: {
               if (scanSubSid) model = props.api.usage.readSessionModel(scanSubSid)
 
               const entryKey = existingKey ?? id
-              next.set(entryKey, {
+              const scanned: OwnedEntry = {
                 ...(exists ?? { id }),
+                ownerSid: currSid,
                 title: title || exists?.title || "",
-                agent: exists?.agent ?? agent,
+                agent: (exists?.agent && exists.agent !== "?") ? exists.agent : agent,
                 prompt: prompt || exists?.prompt || "",
                 // Preserve existing values (from handleSessionEnd / KV) — scan must not overwrite
                 tokens: exists?.tokens ?? tokens,
                 cost: exists?.cost ?? cost,
                 model: validModel(exists?.model) ? exists!.model : model,
-                sessionId: exists?.sessionId ?? scanSubSid,
+                sessionId: (exists && !isGuessed(exists) ? exists.sessionId : undefined) ?? scanSubSid ?? exists?.sessionId, guessedSid: scanSubSid ? false : (exists ? isGuessed(exists) : undefined),
                 status,
                 startedAt: exists?.startedAt || Date.now(),
                 endedAt: exists?.endedAt ?? (status === "done" ? Date.now() : undefined),
                 origin: "tool",
                 background: isBackgroundInput(scanInput) || exists?.background === true,
-              })
+              }; next.set(entryKey, scanned)
               if (entryKey !== id) next.delete(id)
             }
           }
-        }
+        } return nextSids })
       } catch {}
+      if (scanClearedIds.size) addCleared(sid, scanClearedIds)
       return next
     })
     // Reconcile: check running entries against live child session status.
     // Covers session.idle events missed while user was inside a child session.
+    lastScanIncomplete = pendingDescendantSids.size > 0
+    for (const dSid of pendingDescendantSids) {
+      try {
+        void Promise.resolve(props.api.session.syncMessages?.(dSid)).then((loaded) => {
+          // Hundreds of loads finish close together: each one asks for the debounced check instead of running a full scan itself.
+          if (!disposed && loaded && props.sessionId === sid) scheduleRescan()
+        }).catch(() => {})
+      } catch {}
+    }
     setEntryMapRaw((prev) => settleIdleEntries(prev))
     // 持久化 scan 修复结果（merge-safe：缺失字段始终以 KV 现有值为准），
     // 让恢复的条目在重新挂载后仍在，并能同步到其他实例。
@@ -1030,6 +1144,7 @@ export function SubAgentPanel(props: {
       try {
         const children = props.api.session.listChildren?.(sid)
         if (children) liveChildIds = new Set(children.map((c) => c.id).filter((id): id is string => Boolean(id)))
+        if (liveChildIds) for (const k of entryTwins.keys()) if (k.startsWith("sub:")) liveChildIds.add(k.slice(4))
       } catch {}
       const prunable = prunableClearedIds({
         clearedIds: scanClearedIds,
@@ -1042,6 +1157,35 @@ export function SubAgentPanel(props: {
   }
 
   let rescanTimer: ReturnType<typeof setTimeout> | undefined
+  // settled: sessions whose messages matched the entries at the last check, with the child sessions found there. The check skips them until an event
+  // names them, a new child session appears under them, or their turn in the 4 s recheck comes (8 per poll). known: child sessions the poll has seen.
+  let settledRoot = ""
+  const settled = new Map<string, string[]>(), known = new Set<string>()
+  // Cleared call ids that have no known session yet. missKey/missAt: the list that was last looked up, and when. missSeen: child sessions that lookup
+  // covered. missDirty: sessions an event has named since.
+  let missKey = "", missAt = 0
+  const missSeen = new Set<string>(), missDirty = new Set<string>()
+  const markChanged = (e: PanelEvent) => { const s = e.payload?.sessionID; if (typeof s === "string" && s) { settled.delete(s); missDirty.add(s) } }
+  /** One statement looks the open cleared call ids up. Every session is asked when the list changes and again after 60 s; in between only sessions that changed or are new. */
+  const resolveClearedCalls = (cleared: Set<string>, children: ChildSessionLike[]) => {
+    const root = props.sessionId
+    const open = [...cleared].filter((c) => c.startsWith("tool:") && !entryTwins.has(c))
+    const key = root + ":" + open.join()
+    const owners = new Set([root, ...children.map((k) => k.parentId ?? root)])
+    const full = key !== missKey || Date.now() - missAt > 60000
+    if (full) missSeen.clear()
+    const ask = new Set(full ? owners : [...missDirty].filter((x) => owners.has(x)))
+    for (const k of children) if (!missSeen.has(k.id)) { missSeen.add(k.id); ask.add(k.parentId ?? root) }
+    let hits: Map<string, string> | undefined
+    if (open.length > 0 && ask.size > 0) {
+      hits = props.api.session.resolveCalls?.([...ask], open.map((c) => c.slice(5)))
+      // A failed lookup forgets the list, so the next poll asks every session again.
+      if (!hits) { missKey = ""; return }
+    }
+    if (full) { missKey = key; missAt = Date.now() }
+    missDirty.clear()
+    for (const c of open) { const r = hits?.get(c.slice(5)); if (r) { rememberTwin(c, r); cleared.add("sub:" + r) } }
+  }
 
   /** 当最新消息与 entry map 不一致时为 true：子代理 tool part 尚未建条目，
    *  或非后台 tool 已完成而条目仍停在 running。
@@ -1050,38 +1194,77 @@ export function SubAgentPanel(props: {
    *  也能恢复条目。 */
   const missingNewestToolPart = (): boolean => {
     try {
-      const msgs = props.api.session.messages(props.sessionId) as any[] | undefined
-      if (!msgs || msgs.length === 0) return false
+      const sid = props.sessionId
+      const rootMsgs = props.api.session.messages(sid) as any[] | undefined
+      if (!rootMsgs || rootMsgs.length === 0) return false
       const map = entryMap()
-      const from = Math.max(0, msgs.length - 6)
-      for (let i = msgs.length - 1; i >= from; i--) {
-        const parts = props.api.session.part(msgs[i]?.id) ?? []
-        for (const part of parts as any[]) {
-          if (!part || part.type !== "tool") continue
-          if (!SUBAGENT_TOOLS.has(String(part.tool ?? ""))) continue
-          const partId = String(part.id ?? "")
-          if (!partId) continue
-          const st = part.state as Record<string, unknown> | undefined
-          const rawStatus = String(st?.status ?? "")
-          // scan 从不为 pending/error part 创建条目；
-          // 这里忽略它们可避免对一直保持该状态的 part 反复 rescan。
-          if (rawStatus !== "running" && rawStatus !== "completed") continue
-          const id = `tool:${partId}`
-          const meta = partMetadata(part, st)
-          const subSid = meta?.session_id !== undefined ? String(meta.session_id)
-            : meta?.sessionId !== undefined ? String(meta.sessionId)
-            : undefined
-          const key = findSubEntryKey(map, id, subSid)
-          const entry = key ? map.get(key) : undefined
-          if (!entry) return true
-          // 非后台 tool 已完成、条目却仍停在 running：补一次 scan 收尾
-          // （success 事件可能因缺少 metadata 被适配层丢弃）。
-          const input = st?.input as Record<string, unknown> | undefined
-          const isBackground = isBackgroundInput(input)
-          const stillRunning = entry.status === "running" || entry.status === "cancel_requested"
-          if (rawStatus === "completed" && !isBackground && stillRunning) return true
+      const cleared = readCleared(sid, map.values())
+      let missing = false
+      if (settledRoot !== sid) { settled.clear(); settledRoot = sid }
+      // A child that is still busy ends through its own idle event; a running entry under a completed tool part is then no reason to rescan.
+      const busy = (s?: string) => { if (!s) return false; try { const st = props.api.session.status(s); return Boolean(st && st.type !== "idle") } catch { return false } }
+      walkSessionTree(sid, (currSid) => {
+        if (missing) return []
+        const nextSids: string[] = currSid === sid ? [
+          ...(props.api.session.listChildren?.(sid) ?? []).map((c) => c.id),
+          ...[...map.values()].map((e) => e.sessionId).filter((x): x is string => Boolean(x)),
+        ] : []
+        const done = currSid !== sid ? settled.get(currSid) : undefined
+        if (done) return done
+        let live = false
+        let msgs: any[] | undefined = currSid === sid ? rootMsgs : undefined
+        if (currSid !== sid) {
+          try { msgs = props.api.session.messages(currSid) as any[] | undefined } catch { msgs = undefined }
+          if (!msgs || msgs.length === 0) {
+            try {
+              void Promise.resolve(props.api.session.syncMessages?.(currSid)).then((loaded) => {
+                if (loaded && !disposed && props.sessionId === sid) scheduleRescan()
+              }).catch(() => {})
+            } catch {}
+            return nextSids
+          }
         }
-      }
+        if (!msgs) return nextSids
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          const parts = props.api.session.part(msgs[i]?.id) ?? []
+          for (const partRaw of parts as any[]) {
+            if (!partRaw || partRaw.type !== "tool" || !SUBAGENT_TOOLS.has(String(partRaw.tool ?? ""))) continue
+            const part = partRaw as Record<string, any>
+            const partId = String(part.id ?? "")
+            if (!partId) continue
+            const st = part.state as Record<string, unknown> | undefined
+            const rawStatus = String(st?.status ?? "")
+            if (rawStatus !== "running" && rawStatus !== "completed" && rawStatus !== "error") continue
+            if (rawStatus === "running") live = true
+            const id = `tool:${partId}`
+            const meta = partMetadata(part, st)
+            let subSid = meta?.session_id !== undefined ? String(meta.session_id)
+              : meta?.sessionId !== undefined ? String(meta.sessionId)
+              : meta?.sessionID !== undefined ? String(meta.sessionID)
+              : undefined
+            if (!subSid) {
+              try {
+                subSid = props.api.session.resolveChild?.({ parentId: currSid, callId: partId })
+                  ?? (currSid !== sid ? props.api.session.resolveChild?.({ parentId: sid, callId: partId }) : undefined)
+              } catch {}
+            }
+            if (subSid) { rememberTwin(id, subSid, currSid); nextSids.push(subSid) }
+            if (isCleared(cleared, id, subSid, currSid)) continue
+            const key = findSubEntryKey(map, id, subSid)
+            const entry = key ? map.get(key) : undefined
+            const input = st?.input as Record<string, unknown> | undefined
+            // A failed tool part matters only while its entry still shows running.
+            if (rawStatus === "error") { if (entry && entry.status === "running") missing = true; continue }
+            if (!entry || entry.origin === "sub" || (!entry.sessionId && subSid) ||
+                (rawStatus === "completed" && !isBackgroundInput(input) && (entry.status === "running" || entry.status === "cancel_requested") && !busy(subSid))) {
+              missing = true
+            }
+          }
+        }
+        if (!missing && !live && currSid !== sid) settled.set(currSid, nextSids)
+        return nextSids
+      })
+      return missing
     } catch {}
     return false
   }
@@ -1103,6 +1286,7 @@ export function SubAgentPanel(props: {
 
   // usage enrichment 轮询的 round-robin 游标。
   let enrichCursor = 0
+  let finishedCursor = 0
 
   onMount(() => {
     // 刷新模式（/subagent-refresh）：
@@ -1129,11 +1313,11 @@ export function SubAgentPanel(props: {
             try {
               const children = props.api.session.listChildren?.(props.sessionId)
               if (children) {
+                // A child session the poll has not seen before: check the session that started it again.
+                for (const k of children) if (!known.has(k.id)) { known.add(k.id); settled.delete(k.parentId ?? props.sessionId) }
+                const cleared = readCleared(props.sessionId, next.values()); resolveClearedCalls(cleared, children); if (cleared.size) addCleared(props.sessionId, cleared); for (const [k, e] of next) if (!isGuessed(e) && isCleared(cleared, e.id, e.sessionId, ownerOf(e))) { next.delete(k); changed = true }
                 const linked = new Set<string>()
                 for (const e of next.values()) if (e.sessionId) linked.add(e.sessionId)
-                const { parentSid, isChild } = resolveParent(props.sessionId)
-                const rec = loadSessionData()[parentSid]
-                const cleared = new Set<string>(isChild ? rec?.children?.[props.sessionId]?.clearedIds : rec?.clearedIds)
                 for (const child of children) {
                   if (!child.id || linked.has(child.id)) continue
                   const id = `sub:${child.id}`
@@ -1157,6 +1341,12 @@ export function SubAgentPanel(props: {
                     origin: "sub",
                   })
                   changed = true
+                }
+                // The session total of every linked entry comes from the tree rows of this poll (it only grows), so the 1 s reread of finished entries has nothing left to write.
+                const totals = new Map(children.map((c) => [c.id, c.totalTokens]))
+                for (const [k, e] of next) {
+                  const total = e.sessionId && !isGuessed(e) ? totals.get(e.sessionId) : undefined
+                  if (total !== undefined && total > (e.totalTokens ?? 0)) { next.set(k, { ...e, totalTokens: total }); changed = true }
                 }
               }
             } catch {}
@@ -1192,15 +1382,7 @@ export function SubAgentPanel(props: {
               const id = candidates[(start + k) % candidates.length]
               let entry = next.get(id)
               if (!entry) continue
-              if (!entry.sessionId) {
-                try {
-                  const callId = String(entry.id).replace(/^tool:/, "")
-                  const sid = props.api.session.resolveChild?.({
-                    parentId: props.sessionId, callId, agent: entry.agent, startedAt: entry.startedAt,
-                  })
-                  if (sid) { entry = { ...entry, sessionId: sid }; next.set(id, entry); changed = true }
-                } catch {}
-              }
+              if (!entry.sessionId || isGuessed(entry)) { const r = applyResolvedChild(id, entry, next, readCleared(props.sessionId, next.values())); if (r.changed) changed = true; if (!r.entry) continue; entry = r.entry }
               if (!entry.sessionId) continue
               const childSid = entry.sessionId
               // 只从子会话读取，绝不读父会话。较旧的子会话
@@ -1209,7 +1391,7 @@ export function SubAgentPanel(props: {
               let isChild = false
               try {
                 const s = props.api.session.get(childSid)
-                isChild = !s || s.parentID === props.sessionId
+                isChild = !s || s.parentID === props.sessionId || isDescendantOf(childSid, props.sessionId)
               } catch { isChild = true }
               if (!isChild) continue
               budget--
@@ -1225,6 +1407,10 @@ export function SubAgentPanel(props: {
                 const cost = props.api.usage.readSessionCost(childSid)
                 if (cost !== undefined && cost !== entry.cost) { nextEntry.cost = cost; entryChanged = true }
               }
+              if (running || entry.totalTokens === undefined) {
+                const sum = props.api.usage.readSessionTotalTokens(childSid)
+                if (sum !== undefined && sum > (entry.totalTokens ?? 0)) { nextEntry.totalTokens = sum; entryChanged = true }
+              }
               if (running || !validModel(entry.model)) {
                 const model = props.api.usage.readSessionModel(childSid)
                 if (model && model !== entry.model) { nextEntry.model = model; entryChanged = true }
@@ -1238,6 +1424,19 @@ export function SubAgentPanel(props: {
               if (entryChanged) { next.set(id, nextEntry); changed = true }
             }
             enrichCursor = (start + Math.max(1, attempted)) % candidates.length
+          }
+          // 已结束的条目每个 tick 轮流重读一条 usage：结束事件时库里的 cost/tokens 可能还是旧值（info 有 5s 缓存），不重读就永远停在旧值。
+          // tokens 直接取读到的值（上下文压缩后会变小，库里是多少就显示多少）；cost 和会话累计 totalTokens 只增不减：宿主只加载部分消息时求和偏小，不能盖掉已存的值。
+          const finished = [...next].filter(([, e]) => e.sessionId && !isGuessed(e) && e.status !== "running" && e.status !== "cancel_requested")
+          if (finished.length > 0) {
+            const [key, e] = finished[finishedCursor++ % finished.length], sid = e.sessionId!
+            let own = true // 与上面的 isChild 判断相同：绝不读父会话
+            try { const s = props.api.session.get(sid); own = !s || s.parentID === props.sessionId || isDescendantOf(sid, props.sessionId) } catch {}
+            if (own) {
+              const rt = props.api.usage.readSessionTokens(sid), rc = props.api.usage.readSessionCost(sid), rs = props.api.usage.readSessionTotalTokens(sid)
+              const tokens = rt ?? e.tokens, cost = rc === undefined ? e.cost : Math.max(rc, e.cost ?? 0), sum = rs === undefined ? e.totalTokens : Math.max(rs, e.totalTokens ?? 0)
+              if (tokens !== e.tokens || cost !== e.cost || sum !== e.totalTokens) { next.set(key, { ...e, tokens, cost, totalTokens: sum }); changed = true }
+            }
           }
           if (!changed) return prev
           enriched = next
@@ -1255,6 +1454,9 @@ export function SubAgentPanel(props: {
       // 子代理 part。与事件订阅的健康状况无关。
       if (tick % 4 === 0) {
         untrack(() => {
+          // Up to 8 settled sessions are checked again at every poll, so a change that came without an event is still found.
+          let rechecked = 0
+          for (const x of [...settled.keys()]) { if (rechecked++ >= 8) break; settled.delete(x) }
           if (missingNewestToolPart()) {
             runSessionScan(props.sessionId, false)
             bump()
@@ -1267,7 +1469,9 @@ export function SubAgentPanel(props: {
         untrack(() => {
           const hasRunning = entryList().some((e) => e.status === "running" || e.status === "cancel_requested")
           if (hasRunning) {
-            runSessionScan(props.sessionId, false)
+            // Check the sessions that hold a running entry again; rescan only when their history and the entries differ.
+            for (const e of entryList()) if (e.status === "running" || e.status === "cancel_requested") settled.delete(ownerOf(e) ?? props.sessionId)
+            if (missingNewestToolPart()) runSessionScan(props.sessionId, false)
             bump()
           }
         })
@@ -1277,10 +1481,11 @@ export function SubAgentPanel(props: {
     bump()
 
     const unsubPart = props.api.event.on("part.updated", (e) => {
+      markChanged(e)
       handlePartUpdated(e)
       bump()
     })
-    const unsubMsg = props.api.event.on("message.updated", () => { bump(); scheduleRescan() })
+    const unsubMsg = props.api.event.on("message.updated", (e) => { markChanged(e); bump(); scheduleRescan() })
     const unsubIdle = props.api.event.on("session.idle", (e) => {
       handleSessionEnd(e, "done")
       bump()
@@ -1317,6 +1522,7 @@ export function SubAgentPanel(props: {
     if (forceReload) clearTimeout(persistTimer)
 
     let attempts = 0
+    let seeded = false
     let retryTimer: ReturnType<typeof setTimeout> | undefined
 
     const run = () => {
@@ -1335,11 +1541,12 @@ export function SubAgentPanel(props: {
             })).catch(() => {})
           }
         }
-        const ok = runSessionScan(sid, switched || forceReload)
+        const ok = runSessionScan(sid, !seeded && (switched || forceReload))
+        if (ok) seeded = true
         // 首次挂载时宿主消息缓存可能尚未就绪；
         // 重试几次，避免面板一直空着直到
         // 下一次切换会话。
-        if (!ok && attempts < 4) {
+        if ((!ok || lastScanIncomplete) && attempts < 4) {
           attempts++
           retryTimer = setTimeout(run, 400)
         }
@@ -1447,7 +1654,7 @@ export function SubAgentPanel(props: {
 
   const totalTokens = createMemo(() => {
     let sum = 0
-    for (const e of entryList()) { if (e.tokens) sum += e.tokens }
+    for (const e of entryList()) sum += e.totalTokens ?? e.tokens ?? 0 // 会话累计；还没读到累计值的条目按上下文大小计
     return sum
   })
 
@@ -1484,7 +1691,7 @@ export function SubAgentPanel(props: {
   // ── expanded detail right-align ──
   const expandedMaxLabelW = createMemo(() => {
     const labels = [
-      t("agent.label"), t("status.label"), t("time.label"), t("tokens.label"),
+      t("agent.label"), t("status.label"), t("time.label"), t("tokens.label"), t("totalTokens.label"),
       t("error.label"), t("cost.label"), t("model.label"), t("todo.label"), t("session.label"),
     ]
     return Math.max(...labels.map(l => visualWidth(l + ": ")))
@@ -1683,7 +1890,7 @@ export function SubAgentPanel(props: {
               // Entry label: collapsed shows title only, expanded shows title only too
               const tokenText = () =>
                 !isExpanded() && props.showEntryTokens() && entry.tokens !== undefined && entry.tokens > 0
-                  ? ` ${fmtTokens(entry.tokens!)}`
+                  ? ` ${fmtTokens(entry.tokens!)}${entry.totalTokens ? `/${fmtTokens(entry.totalTokens)}` : ""}`
                   : ""
               const costText = () =>
                 !isExpanded() && props.showEntryCost() && entry.cost !== undefined && entry.cost > 0
@@ -1788,6 +1995,14 @@ export function SubAgentPanel(props: {
                         <span style={{ fg: pal().primary }}>{t("tokens.label")}: </span>
                         <span style={{ fg: pal().muted }}>{" ".repeat(expandedPad(t("tokens.label")))}</span>
                         <span style={{ fg: pal().muted }}>{fmtTokens(entry.tokens!)}</span>
+                      </text>
+                    </Show>
+                    <Show when={entry.totalTokens !== undefined}>
+                      <text>
+                        {"  "}
+                        <span style={{ fg: pal().primary }}>{t("totalTokens.label")}: </span>
+                        <span style={{ fg: pal().muted }}>{" ".repeat(expandedPad(t("totalTokens.label")))}</span>
+                        <span style={{ fg: pal().muted }}>{fmtTokens(entry.totalTokens!)}</span>
                       </text>
                     </Show>
                     <Show when={entry.error}>

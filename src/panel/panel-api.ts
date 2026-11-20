@@ -23,6 +23,10 @@ export interface ChildSessionLike {
   idleOutcome?: string
   /** Still running: last message is newer than time_idle (resume keeps the old value). */
   active?: boolean
+  /** The session that started this one. */
+  parentId?: string
+  /** Sum of the token columns of the session row. */
+  totalTokens?: number
 }
 
 export interface SessionStatusLike {
@@ -64,6 +68,8 @@ export interface PanelApi {
     status(sid: string): SessionStatusLike | undefined
     /** Raw message list for a session (scan / error extraction). */
     messages(sid: string): unknown[] | undefined
+    /** Ask the host to load a session's messages; true when messages were loaded (list changed, or non-empty while throttled). */
+    syncMessages?(sid: string): Promise<boolean> | boolean
     /** Raw parts of a message (scan). */
     part(messageID: string): unknown[] | undefined
     /** Optional host-side fallback: map a subagent tool call to its child session
@@ -73,7 +79,10 @@ export interface PanelApi {
       callId?: string
       agent?: string
       startedAt?: number
+      excludeIds?: ReadonlySet<string>
     }): string | undefined
+    /** Optional host-side batch lookup, call id → child session, searched in the given sessions only. undefined = the lookup failed. */
+    resolveCalls?(sessionIds: string[], callIds: string[]): Map<string, string> | undefined
     /** Optional host-side listing of spawned child sessions. */
     listChildren?(parentId: string): ChildSessionLike[] | undefined
   }

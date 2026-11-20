@@ -22,6 +22,7 @@ export interface ChildSessionInfo {
   model?: string
   cost?: number
   tokens?: number
+  totalTokens?: number
   timeCreated?: number
   timeIdle?: number
   idleOutcome?: string
@@ -32,12 +33,16 @@ export interface ChildSessionInfo {
 export interface SessionDbIndex {
   /** 数据库可用且设置项开启时为 true。 */
   enabled(): boolean
-  /** call id → 子会话 id（前台/后台通用）。 */
+  /** call id → child session id, looked up in the tool calls of this session only (foreground and background). */
   resolveCall(parentId: string, callId: string): string | undefined
-  /** 无 call id 时的兜底：按 agent + 起始时间匹配子会话。 */
-  matchChild(parentId: string, agent: string | undefined, startedAt: number | undefined): string | undefined
+  /** One statement: which of these call ids were made in these sessions, and the child session each one started. undefined = the read failed. */
+  resolveCalls(sessionIds: string[], callIds: string[]): Map<string, string> | undefined
+  /** 无 call id 时的兜底：按 agent + 起始时间匹配子会话。directOnly 时只看直接子会话。 */
+  matchChild(parentId: string, agent: string | undefined, startedAt: number | undefined, directOnly?: boolean, excludeIds?: ReadonlySet<string>): string | undefined
   /** 子会话汇总（model/tokens/cost/time_idle）。 */
   info(sid: string): ChildSessionInfo | undefined
+  /** The row of this session from the last tree read of children(), while that read is at most 15 s old. Never runs a statement. */
+  peek(sid: string): ChildSessionInfo | undefined
   /** 该会话派生的子会话（spawn），用于补全没有工具条目的衍生会话。 */
   children(parentId: string): ChildSessionInfo[] | undefined
 }
@@ -47,7 +52,7 @@ interface SqlStatement {
   all(...params: unknown[]): SqlRow[]
   get(...params: unknown[]): SqlRow | undefined
 }
-interface SqlDatabase {
+export interface SqlDatabase {
   query(sql: string): SqlStatement
   close?(): void
 }
@@ -166,13 +171,37 @@ const ASSISTANT_COST_SQL = `
   SELECT COUNT(*) AS n, SUM(COALESCE(json_extract(data, '$.cost'), 0)) AS total
   FROM session_message WHERE session_id = ? AND type = 'assistant'`
 
-const CHILDREN_SQL = `
-  SELECT id, agent, title, model, cost,
-         tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write,
-         time_created, time_idle, idle_outcome
-  FROM session_v2
-  WHERE parent_id = ? AND (fork_session_id IS NULL OR fork_session_id = '')
-  ORDER BY time_created`
+// One statement for a whole subtree: the session rows plus what info() reads per session (last message, last assistant usage, summed cost).
+// UNION drops rows already seen, so a parent_id cycle ends; forks are not followed.
+const TREE_SQL = `
+  WITH RECURSIVE tree(id) AS (
+    SELECT ? UNION
+    SELECT s.id FROM session_v2 s JOIN tree ON s.parent_id = tree.id
+    WHERE s.fork_session_id IS NULL OR s.fork_session_id = '')
+  SELECT s.id, s.parent_id, s.agent, s.title, s.model, s.cost,
+         s.tokens_input, s.tokens_output, s.tokens_reasoning, s.tokens_cache_read, s.tokens_cache_write,
+         s.time_created, s.time_idle, s.idle_outcome,
+         (SELECT type FROM session_message WHERE session_id = s.id ORDER BY seq DESC LIMIT 1) AS last_type,
+         (SELECT COALESCE(time_updated, time_created) FROM session_message WHERE session_id = s.id ORDER BY seq DESC LIMIT 1) AS last_at,
+         (SELECT json_object('input', json_extract(data, '$.tokens.input'), 'output', json_extract(data, '$.tokens.output'),
+                 'reasoning', json_extract(data, '$.tokens.reasoning'), 'cache_read', json_extract(data, '$.tokens.cache.read'),
+                 'cache_write', json_extract(data, '$.tokens.cache.write'), 'model_id', json_extract(data, '$.model.id'))
+          FROM session_message WHERE session_id = s.id AND type = 'assistant' AND json_extract(data, '$.tokens.output') > 0
+          ORDER BY seq DESC LIMIT 1) AS la,
+         CASE WHEN s.cost > 0 THEN NULL ELSE (
+           SELECT json_object('n', COUNT(*), 'total', SUM(COALESCE(json_extract(data, '$.cost'), 0)))
+           FROM session_message WHERE session_id = s.id AND type = 'assistant') END AS ac
+  FROM session_v2 s WHERE s.id IN (SELECT id FROM tree) AND s.id <> ?
+  ORDER BY s.time_created, s.id`
+
+// CALL_MAP_SQL for many sessions and many call ids at once (both passed as JSON arrays).
+const CALLS_SQL = `
+  SELECT json_extract(p.value, '$.id') AS call_id,
+         json_extract(p.value, '$.state.metadata.sessionID') AS child_sid
+  FROM session_message m, json_each(m.data, '$.content') p
+  WHERE m.session_id IN (SELECT value FROM json_each(?)) AND m.type = 'assistant'
+    AND json_extract(p.value, '$.id') IN (SELECT value FROM json_each(?))
+    AND json_extract(p.value, '$.state.metadata.sessionID') IS NOT NULL`
 
 const num = (v: unknown): number | undefined => {
   const n = Number(v)
@@ -180,24 +209,25 @@ const num = (v: unknown): number | undefined => {
 }
 const str = (v: unknown): string | undefined => (typeof v === "string" && v.length > 0 ? v : undefined)
 
-export function createSessionDbIndex(enabled: () => boolean): SessionDbIndex | undefined {
-  const dbPath = findDbPath()
-  if (!dbPath) return undefined
-
-  let db: SqlDatabase | undefined
+export function createSessionDbIndex(enabled: () => boolean, injectedDb?: SqlDatabase): SessionDbIndex | undefined {
+  let db: SqlDatabase | undefined = injectedDb
   let failed = false
-  void (async () => {
-    try {
-      const mod = (await import(BUN_SQLITE)) as { Database?: new (p: string, o?: Record<string, unknown>) => SqlDatabase }
-      const Database = mod?.Database
-      if (!Database) { failed = true; return }
-      db = new Database(dbPath, { readonly: true })
-      try { db.query("pragma query_only = on").all() } catch {}
-    } catch {
-      failed = true
-      db = undefined
-    }
-  })()
+  if (!injectedDb) {
+    const dbPath = findDbPath()
+    if (!dbPath) return undefined
+    void (async () => {
+      try {
+        const mod = (await import(BUN_SQLITE)) as { Database?: new (p: string, o?: Record<string, unknown>) => SqlDatabase }
+        const Database = mod?.Database
+        if (!Database) { failed = true; return }
+        db = new Database(dbPath, { readonly: true })
+        try { db.query("pragma query_only = on").all() } catch {}
+      } catch {
+        failed = true
+        db = undefined
+      }
+    })()
+  }
 
   const CALL_MAP_TTL_MS = 15000
   const CALL_MAP_RETRY_MS = 2000
@@ -209,6 +239,16 @@ export function createSessionDbIndex(enabled: () => boolean): SessionDbIndex | u
   const ready = (): boolean => {
     if (failed || db === undefined) return false
     try { return enabled() } catch { return false }
+  }
+
+  // One statement per root per CALL_MAP_TTL_MS. A failed read throws and caches nothing, so callers can tell "unavailable" from "no children".
+  const listDescendantRows = (rootId: string): SqlRow[] => {
+    const now = Date.now()
+    const cached = childrenCache.get(rootId)
+    if (cached && now - cached.at <= CALL_MAP_TTL_MS) return cached.list
+    const list = db!.query(TREE_SQL).all(rootId, rootId)
+    childrenCache.set(rootId, { list, at: now })
+    return list
   }
 
   const buildCallMap = (parentId: string): Map<string, string> => {
@@ -227,6 +267,20 @@ export function createSessionDbIndex(enabled: () => boolean): SessionDbIndex | u
     return map
   }
 
+  const resolveCalls = (sessionIds: string[], callIds: string[]): Map<string, string> | undefined => {
+    if (!ready()) return undefined
+    const out = new Map<string, string>()
+    if (sessionIds.length === 0 || callIds.length === 0) return out
+    try {
+      for (const row of db!.query(CALLS_SQL).all(JSON.stringify(sessionIds), JSON.stringify(callIds))) {
+        const id = str(row.call_id)
+        const sid = str(row.child_sid)
+        if (id && sid && !out.has(id)) out.set(id, sid)
+      }
+    } catch { return undefined }
+    return out
+  }
+
   const resolveCall = (parentId: string, callId: string): string | undefined => {
     if (!ready() || !parentId || !callId) return undefined
     const prev = callMaps.get(parentId)
@@ -234,22 +288,16 @@ export function createSessionDbIndex(enabled: () => boolean): SessionDbIndex | u
     return map.get(callId) ?? buildCallMap(parentId).get(callId)
   }
 
-  const matchChild = (parentId: string, agent: string | undefined, startedAt: number | undefined): string | undefined => {
+  const matchChild = (parentId: string, agent: string | undefined, startedAt: number | undefined, directOnly = false, excludeIds?: ReadonlySet<string>): string | undefined => {
     if (!ready() || !parentId || startedAt === undefined) return undefined
-    const now = Date.now()
-    let cached = childrenCache.get(parentId)
-    if (!cached || now - cached.at > CALL_MAP_TTL_MS) {
-      let list: SqlRow[] = []
-      try { list = db!.query(CHILDREN_SQL).all(parentId) } catch {}
-      cached = { list, at: now }
-      childrenCache.set(parentId, cached)
-    }
+    const cmap = excludeIds ? (callMaps.get(parentId)?.map ?? buildCallMap(parentId)) : undefined, claimed = cmap ? new Set(cmap.values()) : undefined
     let best: string | undefined
     let bestAt = Number.POSITIVE_INFINITY
-    for (const row of cached.list) {
+    for (const row of listDescendantRows(parentId)) {
       const sid = str(row.id)
       const t = num(row.time_created)
-      if (!sid || t === undefined) continue
+      if (!sid || t === undefined || excludeIds?.has(sid) || claimed?.has(sid)) continue
+      if (directOnly && str(row.parent_id) !== parentId) continue
       if (t < startedAt - 2000) continue
       if (agent !== undefined && str(row.agent) !== agent) continue
       if (t < bestAt) { bestAt = t; best = sid }
@@ -272,11 +320,9 @@ export function createSessionDbIndex(enabled: () => boolean): SessionDbIndex | u
           input: last.input, output: last.output, reasoning: last.reasoning,
           cache: { read: last.cache_read, write: last.cache_write },
         } : undefined)
-        if (tokens === undefined) {
-          const agg = (num(row.tokens_input) || 0) + (num(row.tokens_output) || 0) + (num(row.tokens_reasoning) || 0) +
-            (num(row.tokens_cache_read) || 0) + (num(row.tokens_cache_write) || 0)
-          if (agg > 0) tokens = agg
-        }
+        const agg = (num(row.tokens_input) || 0) + (num(row.tokens_output) || 0) + (num(row.tokens_reasoning) || 0) +
+          (num(row.tokens_cache_read) || 0) + (num(row.tokens_cache_write) || 0)
+        if (tokens === undefined && agg > 0) tokens = agg
         // cost 语义对齐宿主 readSessionCost：优先会话聚合值，
         // 0 时回退 assistant 消息求和（有消息即权威，0 表示确实免费）。
         let cost = num(row.cost)
@@ -292,6 +338,7 @@ export function createSessionDbIndex(enabled: () => boolean): SessionDbIndex | u
           model: modelIdOf(last?.model_id) ?? modelIdOf(row.model),
           cost,
           tokens,
+          totalTokens: agg > 0 ? agg : undefined,
           timeCreated: num(row.time_created),
           timeIdle: num(row.time_idle),
           idleOutcome: str(row.idle_outcome),
@@ -307,40 +354,57 @@ export function createSessionDbIndex(enabled: () => boolean): SessionDbIndex | u
     return result
   }
 
+  const treeInfo = new Map<string, { info: ChildSessionInfo; at: number }>()
+  const seededAt = new Map<string, number>()
+  const peek = (sid: string): ChildSessionInfo | undefined => {
+    const hit = treeInfo.get(sid)
+    return hit && Date.now() - hit.at <= CALL_MAP_TTL_MS ? hit.info : undefined
+  }
+
   const children = (parentId: string): ChildSessionInfo[] | undefined => {
     if (!ready() || !parentId) return undefined
-    const now = Date.now()
-    let cached = childrenCache.get(parentId)
-    if (!cached || now - cached.at > CALL_MAP_TTL_MS) {
-      let list: SqlRow[] = []
-      try { list = db!.query(CHILDREN_SQL).all(parentId) } catch {}
-      cached = { list, at: now }
-      childrenCache.set(parentId, cached)
-    }
     const out: ChildSessionInfo[] = []
-    for (const row of cached.list) {
+    for (const row of listDescendantRows(parentId)) {
       const sid = str(row.id)
       if (!sid) continue
-      const full = info(sid)
-      if (full) { out.push(full); continue }
-      // info 缓存未命中时不丢字段：用列表行自身的汇总兜底。
+      // Same values as info(), read from the columns of the tree row instead of three statements per session.
+      const last = typeof row.la === "string" ? (JSON.parse(row.la) as SqlRow) : undefined
+      const aggCost = typeof row.ac === "string" ? (JSON.parse(row.ac) as SqlRow) : undefined
+      const tokens = contextTokens(last ? {
+        input: last.input, output: last.output, reasoning: last.reasoning,
+        cache: { read: last.cache_read, write: last.cache_write },
+      } : undefined)
       const agg = (num(row.tokens_input) || 0) + (num(row.tokens_output) || 0) + (num(row.tokens_reasoning) || 0) +
         (num(row.tokens_cache_read) || 0) + (num(row.tokens_cache_write) || 0)
+      let cost = num(row.cost)
+      if (!(typeof cost === "number" && cost > 0) && aggCost && Number(aggCost.n) > 0) cost = Number(aggCost.total) || 0
       out.push({
         id: sid,
-        parentId,
+        parentId: str(row.parent_id) ?? parentId,
         agent: str(row.agent),
         title: str(row.title),
-        model: modelIdOf(row.model),
-        cost: num(row.cost),
-        tokens: agg > 0 ? agg : undefined,
+        model: modelIdOf(last?.model_id) ?? modelIdOf(row.model),
+        cost,
+        tokens: tokens ?? (agg > 0 ? agg : undefined),
+        totalTokens: agg > 0 ? agg : undefined,
         timeCreated: num(row.time_created),
         timeIdle: num(row.time_idle),
         idleOutcome: str(row.idle_outcome),
+        active: isSessionActive({
+          timeIdle: num(row.time_idle),
+          lastMessageType: str(row.last_type),
+          lastMessageAt: num(row.last_at),
+        }),
       })
+    }
+    // Once per tree read: keep the rows, stamped with the time of the read, so peek() and info() answer from them without a statement.
+    const at = childrenCache.get(parentId)?.at ?? 0
+    if (seededAt.get(parentId) !== at) {
+      seededAt.set(parentId, at)
+      for (const c of out) { treeInfo.set(c.id, { info: c, at }); infos.set(c.id, { info: c, at }) }
     }
     return out
   }
 
-  return { enabled: ready, resolveCall, matchChild, info, children }
+  return { enabled: ready, resolveCall, resolveCalls, matchChild, info, peek, children }
 }
