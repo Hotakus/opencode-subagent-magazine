@@ -84,13 +84,13 @@ test("mergeSubEntries deduplicates the same child session", () => {
   assert.equal(merged.get("tool:first")?.status, "done")
 })
 
-test("progress counters only grow", () => {
+test("cost and todo counters only grow, tokens take the incoming value", () => {
   const newer = entry("tool:a", "child-1", "running", { tokens: 900, cost: 0.5, todoTotal: 10, todoDone: 4 })
   const stale = entry("tool:a", "child-1", "running", { tokens: 300, cost: 0.1, todoTotal: 8, todoDone: 2 })
 
   const merged = mergeSubEntry(newer, stale)
 
-  assert.equal(merged.tokens, 900)
+  assert.equal(merged.tokens, 300)
   assert.equal(merged.cost, 0.5)
   assert.equal(merged.todoTotal, 10)
   assert.equal(merged.todoDone, 4)

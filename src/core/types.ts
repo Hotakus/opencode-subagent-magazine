@@ -9,6 +9,7 @@ export interface SubEntry {
   prompt: string
   error?: string
   tokens?: number
+  totalTokens?: number // 会话累计 token（session_v2 五列之和）；tokens 是最后一轮的上下文大小
   cost?: number
   status: SubStatus
   sessionId?: string

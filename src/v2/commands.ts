@@ -5,8 +5,9 @@ import { TIME_FORMATS, TIME_FORMAT_SAMPLES } from "../core/format"
 import { KV_PREFIX, SETTING_KEYS, updateSessionData, readTTLDays } from "../core/kv"
 import { PLUGIN_VERSION } from "../_version"
 import { LANG_META, createT } from "../i18n"
-import { globalEntryCache, setClearTick } from "../panel/store"
+import { collectClearedEntryIds, globalEntryCache, setClearTick } from "../panel/store"
 import { mergeSubEntriesForPersist } from "../panel/entry-map"
+import { resolveRootSessionId } from "../panel/session-routing"
 import { openSettingsMenu } from "./settings-menu"
 
 /** V2 命令（对齐 V1 的 9 个斜杠命令——promise 式对话框）。 */
@@ -21,12 +22,8 @@ export function makeCommands(
   const onOff = (v: boolean) => (v ? t("settings.on") : t("settings.off"))
 
   const resolveParent = (sid: string): { parentSid: string; isChild: boolean } => {
-    try {
-      const session = api.session.get(sid) as any
-      const parentID = session?.parentID as string | undefined
-      if (parentID) return { parentSid: parentID, isChild: true }
-    } catch {}
-    return { parentSid: sid, isChild: false }
+    const r = resolveRootSessionId(sid, (id) => { try { return api.session.get(id) as any } catch { return undefined } })
+    return { parentSid: r.rootSid, isChild: r.isChild }
   }
 
   return [
@@ -370,8 +367,8 @@ export function makeCommands(
       palette: true,
       run: async () => {
         const sid = signals.sessionId
-        const sessionObj = api.session.get(sid)
-        const parentID = (sessionObj as any)?.parentID as string | undefined
+        const rootInfo = resolveRootSessionId(sid, (id) => { try { return api.session.get(id) as any } catch { return undefined } })
+        const parentID = rootInfo.isChild ? rootInfo.rootSid : undefined
         const cached = globalEntryCache.get(sid)
         let runningCount = 0
         if (cached) {
@@ -388,7 +385,7 @@ export function makeCommands(
         if (choice !== "yes") return
         // 内存缓存可能含尚未落盘的条目——一并计入清除名单，
         // 防止它们随后被 merge 回 KV（见 SubAgentPanel 的持久化过滤）。
-        const cachedIds = [...(globalEntryCache.get(sid)?.values() ?? [])].map((e) => e.id)
+        const cachedEntries = [...(globalEntryCache.get(sid)?.values() ?? [])]
         try {
           let count = 0
           const finish = () => {
@@ -399,27 +396,27 @@ export function makeCommands(
           const done = updateSessionData(kv, (data) => {
             if (parentID) {
               const parent = data[parentID]
-              if (parent?.children?.[sid] || cachedIds.length > 0) {
+              if (parent?.children?.[sid] || cachedEntries.length > 0) {
                 const parentRec = parent ?? (data[parentID] = { ts: Date.now(), entries: [], scroll: 0, expanded: "", children: {} })
                 if (!parentRec.children) parentRec.children = {}
                 const child = parentRec.children[sid] ?? (parentRec.children[sid] = { scroll: 0, expanded: "", entries: [] })
-                const ids = [...new Set([...(child.entries ?? []).map((e) => e.id), ...cachedIds])]
-                count = ids.length
+                const { entryIds, clearedIds } = collectClearedEntryIds(sid, child.entries ?? [], cachedEntries)
+                count = entryIds.length
+                child.clearedIds = [...new Set([...(child.clearedIds ?? []), ...clearedIds])]
                 child.entries = []
                 child.scroll = 0
                 child.expanded = ""
-                child.clearedIds = [...new Set([...(child.clearedIds ?? []), ...ids])]
               }
             } else {
               const rec = data[sid]
-              if (rec || cachedIds.length > 0) {
+              if (rec || cachedEntries.length > 0) {
                 const target = rec ?? (data[sid] = { ts: Date.now(), entries: [], scroll: 0, expanded: "", children: {} })
-                const ids = [...new Set([...(target.entries ?? []).map((e) => e.id), ...cachedIds])]
-                count = ids.length
+                const { entryIds, clearedIds } = collectClearedEntryIds(sid, target.entries ?? [], cachedEntries)
+                count = entryIds.length
+                target.clearedIds = [...new Set([...(target.clearedIds ?? []), ...clearedIds])]
                 target.entries = []
                 target.scroll = 0
                 target.expanded = ""
-                target.clearedIds = [...new Set([...(target.clearedIds ?? []), ...ids])]
               }
             }
           })

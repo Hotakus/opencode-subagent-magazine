@@ -1,6 +1,7 @@
 import type { Context } from "./types"
 import type { PanelApi, PanelEvent, PanelEventType } from "../panel/panel-api"
 import { SETTING_KEYS } from "../core/kv"
+import { sumAssistantTokens } from "../core/usage"
 import { createSessionDbIndex, modelIdOf, statusOfChild } from "./db"
 
 const SUBAGENT_TOOL_V2 = "subagent"
@@ -246,6 +247,7 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
   /** 消息归一化（V1 形状：role/tokens/cost/modelID）+ 建立 part 索引。 */
   const normalizeMessages = (sid: string): any[] => {
     const raw = context.data.session.message.list(sid) ?? []
+    if (raw.length > 0) syncedNonEmpty.add(sid)
     const out: any[] = []
     for (const m of raw) {
       const record = m as Record<string, any>
@@ -267,6 +269,10 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
   // 结果写入本地缓存，供面板的周期性 enrichment 读取。
   const usageCache = new Map<string, { tokens?: number; cost?: number; model?: string; at: number }>()
   const syncRequestedAt = new Map<string, number>()
+  const syncedNonEmpty = new Set<string>()
+  const syncInFlight = new Map<string, Promise<boolean>>()
+  const messageListeners = new Set<(e: PanelEvent) => void>()
+  const snapMsgs = (ms: readonly any[] | undefined) => ms?.length ? ms.length + ":" + JSON.stringify(ms[ms.length - 1]) : ""
   const USAGE_CACHE_TTL_MS = 5000
   const SYNC_THROTTLE_MS = 30000
 
@@ -282,14 +288,46 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
     return hit
   }
 
-  const requestMessageSync = (sid: string) => {
-    const last = syncRequestedAt.get(sid) ?? 0
-    if (Date.now() - last < SYNC_THROTTLE_MS) return
+  // At most 4 host message loads run at once; the rest wait in line. A session with hundreds of subagents asked for all of them in one tick.
+  let syncActive = 0
+  const syncWaiters: Array<() => void> = []
+  const syncSlot = () => new Promise<void>((go) => { if (syncActive < 4) { syncActive++; go() } else syncWaiters.push(go) })
+  const syncDone = () => { const go = syncWaiters.shift(); if (go) go(); else syncActive-- }
+
+  const requestMessageSync = (sid: string): Promise<boolean> => {
+    if (!sid) return Promise.resolve(false)
+    const pending = syncInFlight.get(sid)
+    if (pending) return pending
+    const ttl = syncedNonEmpty.has(sid) ? SYNC_THROTTLE_MS : 1000
+    if (Date.now() - (syncRequestedAt.get(sid) ?? 0) < ttl) {
+      return Promise.resolve((context.data.session.message.list(sid)?.length ?? 0) > 0)
+    }
     syncRequestedAt.set(sid, Date.now())
     try {
       const sync = context.data.session.message.sync
-      if (typeof sync === "function") void sync.call(context.data.session.message, sid).catch(() => {})
-    } catch {}
+      if (typeof sync !== "function") return Promise.resolve(false)
+      const before = snapMsgs(context.data.session.message.list(sid))
+      const p = syncSlot().then(() => sync.call(context.data.session.message, sid)).finally(syncDone)
+        .then(() => {
+          syncInFlight.delete(sid)
+          const list = context.data.session.message.list(sid)
+          const after = snapMsgs(list)
+          if (list?.length) syncedNonEmpty.add(sid)
+          const changed = Boolean(after && after !== before)
+          if (changed) for (const l of messageListeners) l({ type: "message.updated", scope: "global", payload: { sessionID: sid } })
+          return changed
+        })
+        .catch(() => {
+          syncInFlight.delete(sid)
+          syncRequestedAt.delete(sid)
+          return false
+        })
+      syncInFlight.set(sid, p)
+      return p
+    } catch {
+      syncRequestedAt.delete(sid)
+      return Promise.resolve(false)
+    }
   }
 
   const listedSession = (sid: string) => {
@@ -331,7 +369,7 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
           // 否则请数据层同步，稍后重试。
           const cached = cachedUsage(sid)?.tokens
           if (cached !== undefined) return cached
-          requestMessageSync(sid)
+          void requestMessageSync(sid)
           return undefined
         } catch { return undefined }
       },
@@ -365,9 +403,18 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
           }
           const cached = cachedUsage(sid)?.cost
           if (cached !== undefined) return cached
-          requestMessageSync(sid)
+          void requestMessageSync(sid)
           return undefined
         } catch { return undefined }
+      },
+      readSessionTotalTokens: (sid: string): number | undefined => {
+        if (!sid) return undefined
+        // 库里的会话累计值优先；库里没有这条会话时回退到已加载消息求和。
+        try {
+          const dbTotal = dbIndex?.info(sid)?.totalTokens
+          if (dbTotal !== undefined) return dbTotal
+        } catch {}
+        try { return sumAssistantTokens(context.data.session.message.list(sid)) } catch { return undefined }
       },
       readSessionModel: (sid: string): string | undefined => {
         if (!sid) return undefined
@@ -391,7 +438,7 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
           if (listedModel) { rememberUsage(sid, { model: listedModel }); return listedModel }
           const cached = cachedUsage(sid)?.model
           if (cached !== undefined) return cached
-          requestMessageSync(sid)
+          void requestMessageSync(sid)
           return undefined
         } catch { return undefined }
       },
@@ -409,6 +456,8 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
             const found = list.find((s) => (s as any)?.id === sid)
             if (found) return found as any
           }
+          const info = dbIndex?.info(sid)
+          if (info) return { id: info.id, parentID: info.parentId, agent: info.agent, cost: info.cost } as any
           return undefined
         } catch { return undefined }
       },
@@ -425,13 +474,14 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
         // 宿主没有该子会话的实时状态（未加载缓存）时用本地库终态兜底：
         // time_idle 存在且没有恢复活动即已结束；仍在运行则回报 busy。
         try {
-          const info = dbIndex?.info(sid)
+          const info = dbIndex?.peek(sid) ?? dbIndex?.info(sid)
           if (info?.active === true) return { type: "busy" }
           if (statusOfChild(info) !== undefined) return { type: "idle" }
         } catch {}
         return undefined
       },
-      messages: (sid) => { try { return normalizeMessages(sid) } catch { return undefined } },
+      messages: (sid) => { try { const out = normalizeMessages(sid); if (out.length === 0) void requestMessageSync(sid); return out } catch { return undefined } },
+      syncMessages: (sid) => requestMessageSync(sid),
       part: (messageID) => {
         const msg = messageIndex.get(String(messageID))
         if (!msg) return undefined
@@ -447,8 +497,11 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
         try {
           const sid = input.callId ? dbIndex?.resolveCall(input.parentId, input.callId) : undefined
           if (sid) return sid
-          return dbIndex?.matchChild(input.parentId, input.agent, input.startedAt)
+          return dbIndex?.matchChild(input.parentId, input.agent, input.startedAt, true, input.excludeIds ?? new Set())
         } catch { return undefined }
+      },
+      resolveCalls: (sessionIds, callIds) => {
+        try { return dbIndex?.resolveCalls(sessionIds, callIds) } catch { return undefined }
       },
       listChildren: (parentId) => {
         try { return dbIndex?.enabled() ? dbIndex.children(parentId) : undefined } catch { return undefined }
@@ -478,9 +531,14 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
           case "message.updated": {
             const unsubs: Array<() => void> = []
             for (const evt of ["session.step.started", "session.step.ended", "session.step.failed"]) {
-              unsubs.push(context.data.on(evt, () => cb({ type })))
+              unsubs.push(context.data.on(evt, (e) => {
+                const sid = String(((e as Record<string, any>).data as Record<string, any> | undefined)?.sessionID ?? "")
+                if (sid) { syncRequestedAt.delete(sid); syncedNonEmpty.delete(sid) }
+                cb({ type, scope: "global", payload: { sessionID: sid || undefined } })
+              }))
             }
-            return () => { for (const u of unsubs) u() }
+            messageListeners.add(cb)
+            return () => { for (const u of unsubs) u(); messageListeners.delete(cb) }
           }
           case "session.idle": {
             // V1 的 session.idle = 会话结束（含取消后的 idle——settleOnIdle 裁定 cancelled）
@@ -489,7 +547,7 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
             for (const evt of ["session.execution.succeeded", "session.execution.interrupted"]) {
               unsubs.push(context.data.on(evt, (e) => {
                 const sid = String(((e as Record<string, any>).data as Record<string, any> | undefined)?.sessionID ?? "")
-                if (sid) cb({ type, scope: "global", payload: { sessionID: sid } })
+                if (sid) { syncRequestedAt.delete(sid); syncedNonEmpty.delete(sid); cb({ type, scope: "global", payload: { sessionID: sid } }) }
               }))
             }
             return () => { for (const u of unsubs) u() }
@@ -498,7 +556,7 @@ export function createPanelApi(context: Context, settings: PanelApi["settings"])
             return context.data.on("session.execution.failed", (e) => {
               const evt = (e as Record<string, any>).data as Record<string, any> | undefined
               const sid = String(evt?.sessionID ?? "")
-              if (sid) cb({ type, scope: "global", payload: { sessionID: sid, error: evt?.error } })
+              if (sid) { syncRequestedAt.delete(sid); syncedNonEmpty.delete(sid); cb({ type, scope: "global", payload: { sessionID: sid, error: evt?.error } }) }
             })
           default:
             return () => {}
